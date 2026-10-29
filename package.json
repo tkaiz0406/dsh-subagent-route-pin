@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-route-pin",
-  "version": "0.8.22",
+  "version": "0.8.23",
   "description": "DSH host+client plugin: pins the LLM route of delegated child agents (Agency experts, Agent-Teams members) without touching the main agent, and adds a Settings page that edits that route like the main-agent model picker.",
   "type": "module",
   "main": "./index.js",

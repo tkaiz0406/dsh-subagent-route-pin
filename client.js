@@ -28,6 +28,7 @@ window.__ModuleLoader__.load({
      * inserts, then the package-derived id the loader may fall back to.
      */
     const CONFIG_NS_CANDIDATES = ['subagent-route-pin', 'dsh-subagent-route-pin']
+    /** Fallback effort levels for catalog rows that carry no `reasoning` block. */
     const EFFORTS = ['low', 'medium', 'high']
 
     const zh = {
@@ -37,6 +38,7 @@ window.__ModuleLoader__.load({
       provider: '提供商',
       model: '模型',
       effort: '推理强度',
+      effortUnset: '不指定（跟随默认）',
       save: '保存',
       saving: '保存中…',
       saved: '已保存',
@@ -68,6 +70,7 @@ window.__ModuleLoader__.load({
       provider: 'Provider',
       model: 'Model',
       effort: 'Reasoning effort',
+      effortUnset: 'Not set (model default)',
       save: 'Save',
       saving: 'Saving…',
       saved: 'Saved',
@@ -294,7 +297,12 @@ window.__ModuleLoader__.load({
           const firstModel =
             state.catalog.groups.find((group) => group.id === provider)?.models?.[0]?.id ?? ''
           publish({
-            draft: { ...state.draft, provider, model: firstModel },
+            draft: {
+              ...state.draft,
+              provider,
+              model: firstModel,
+              reasoningEffort: retainedEffort(state, provider, firstModel)
+            },
             touched: true,
             conflict: false,
             failed: false,
@@ -303,7 +311,17 @@ window.__ModuleLoader__.load({
         },
         setModel(model) {
           const state = store.get()
-          publish({ draft: { ...state.draft, model }, touched: true, conflict: false, failed: false, landed: false })
+          publish({
+            draft: {
+              ...state.draft,
+              model,
+              reasoningEffort: retainedEffort(state, state.draft.provider, model)
+            },
+            touched: true,
+            conflict: false,
+            failed: false,
+            landed: false
+          })
         },
         setEffort(reasoningEffort) {
           const state = store.get()
@@ -391,6 +409,7 @@ window.__ModuleLoader__.load({
             providerName: group.name ?? group.id,
             model: model.id,
             modelName: model.name ?? model.id,
+            efforts: Array.isArray(model.reasoning?.efforts) ? model.reasoning.efforts : undefined,
             available: true
           })
         }
@@ -402,10 +421,54 @@ window.__ModuleLoader__.load({
           providerName: saved.provider,
           model: saved.model,
           modelName: saved.model,
+          efforts: undefined,
           available: false
         })
       }
       return rows
+    }
+
+    /** Effort levels the selected catalog row declares, or undefined when unknown. */
+    function effortsOf(rows, provider, model) {
+      const row = rows.find((entry) => entry.provider === provider && entry.model === model)
+      return row === undefined || row.available !== true || !Array.isArray(row.efforts) || row.efforts.length === 0
+        ? undefined
+        : row.efforts
+    }
+
+    /**
+     * Options for the effort select. The model's catalog entry wins when it
+     * declares `reasoning.efforts`; the classic trio is only the fallback for
+     * rows without that block. A live value the list does not offer stays
+     * visible as an extra leading option — a controlled <select> would
+     * otherwise fall back to its first option and pass a configured level
+     * (say `max`) off as `low`.
+     */
+    function effortOptions(rows, provider, model, current) {
+      const offered = effortsOf(rows, provider, model)
+      const options = (offered ?? EFFORTS.map((id) => ({ id, name: id }))).map((effort) => ({
+        id: effort.id,
+        name: effort.name ?? effort.id,
+        unavailable: false
+      }))
+      if (current !== '' && !options.some((option) => option.id === current)) {
+        options.unshift({ id: current, name: current, unavailable: true })
+      }
+      return options
+    }
+
+    /**
+     * Keep the drafted effort only when the next model still offers it. Rows
+     * without catalog reasoning info cannot be judged, so their value is kept
+     * (and stays visible through the extra-option branch above).
+     */
+    function retainedEffort(state, provider, model) {
+      const current = state.draft.reasoningEffort
+      if (current === '') return ''
+      const rows = candidates(state.catalog.groups, state.saved)
+      const offered = effortsOf(rows, provider, model)
+      if (offered === undefined) return current
+      return offered.some((effort) => effort.id === current) ? current : ''
     }
 
     function label(t, key) {
@@ -527,7 +590,15 @@ window.__ModuleLoader__.load({
               disabled: !editable,
               onChange: (event) => face.actions.setEffort(event.currentTarget.value)
             },
-            EFFORTS.map((effort) => h('option', { key: effort, value: effort }, effort))
+            h('option', { value: '' }, label(t, 'effortUnset')),
+            effortOptions(rows, state.draft.provider, state.draft.model, state.draft.reasoningEffort).map(
+              (option) =>
+                h(
+                  'option',
+                  { key: option.id, value: option.id },
+                  option.unavailable ? `${option.name} · ${label(t, 'savedUnavailable')}` : option.name
+                )
+            )
           )
         ),
         h(

@@ -21,6 +21,20 @@ function check(label, condition, detail) {
   }
 }
 
+// Depth-first element collector for the fake React tree.
+function collect(node, predicate, out = []) {
+  if (node === null || typeof node !== 'object') return out
+  if (predicate(node)) out.push(node)
+  for (const child of node.children ?? []) collect(child, predicate, out)
+  return out
+}
+
+// The fake createElement keeps array children as arrays (real React flattens
+// them), so option lists need one flatten pass before inspection.
+function flat(children) {
+  return children.flatMap((child) => (Array.isArray(child) ? child : [child]))
+}
+
 // --- load the bundle the way the host does --------------------------------
 let loaded
 const React = {
@@ -130,7 +144,24 @@ function makeContext(options = {}) {
             ok: true,
             value: {
               groups: [
-                { id: 'our-free-model', name: 'Our Free Model', models: [{ id: 'deepseek-v4.1-flash-free', name: 'DeepSeek V4.1 Flash' }] },
+                {
+                  id: 'our-free-model',
+                  name: 'Our Free Model',
+                  models: [
+                    {
+                      id: 'deepseek-v4.1-flash-free',
+                      name: 'DeepSeek V4.1 Flash',
+                      reasoning: {
+                        efforts: [
+                          { id: 'low', name: 'low' },
+                          { id: 'high', name: 'high' },
+                          { id: 'max', name: 'max' }
+                        ],
+                        defaultEffort: 'high'
+                      }
+                    }
+                  ]
+                },
                 { id: 'deepseek-account', name: 'DeepSeek Account', models: [{ id: 'deepseek-flash', name: 'DeepSeek Flash' }] }
               ],
               failures: []
@@ -203,6 +234,58 @@ function makeContext(options = {}) {
   check('saved route lands', snapshot().saved.provider === 'deepseek-account' && snapshot().saved.model === 'deepseek-flash', JSON.stringify(snapshot().saved))
   check('landed flag set', snapshot().landed === true, JSON.stringify({ failed: snapshot().failed, landed: snapshot().landed }))
   check('no longer dirty', snapshot().touched === false, JSON.stringify(snapshot().touched))
+}
+
+// --- the effort select follows the model's declared reasoning efforts -----
+{
+  const { ctx, state } = makeContext({
+    value: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free', reasoningEffort: 'max' }
+  })
+  module_.apply(ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  const element = state.registered[0].component({})
+  const tree = element.type(element.props)
+  const selects = collect(tree, (node) => node.type === 'select')
+  check('three selects render', selects.length === 3, String(selects.length))
+  const effort = selects[2]
+  const options = flat(effort.children).map((option) => option.props.value)
+  check(
+    'effort options follow the model catalog',
+    JSON.stringify(options) === JSON.stringify(['', 'low', 'high', 'max']),
+    JSON.stringify(options)
+  )
+  check('configured max stays selected', effort.props.value === 'max', effort.props.value)
+  check(
+    'unset option is labeled',
+    flat(effort.children)[0].children[0] === '不指定（跟随默认）',
+    String(flat(effort.children)[0].children[0])
+  )
+  // A model without catalog reasoning keeps the classic trio; a configured
+  // value outside it stays visible as an extra leading option instead of the
+  // select silently falling back to its first option.
+  const face = element.props.face
+  face.actions.setProvider('deepseek-account')
+  const treeFallback = element.type(element.props)
+  const effortFallback = collect(treeFallback, (node) => node.type === 'select')[2]
+  const optionsFallback = flat(effortFallback.children).map((option) => option.props.value)
+  check(
+    'trio fallback plus the live value as an extra option',
+    JSON.stringify(optionsFallback) === JSON.stringify(['', 'max', 'low', 'medium', 'high']),
+    JSON.stringify(optionsFallback)
+  )
+  check(
+    'extra option is marked unavailable',
+    flat(effortFallback.children)[1].children[0] === 'max · 已保存但当前不可用',
+    String(flat(effortFallback.children)[1].children[0])
+  )
+  // Switching back to a model that does not offer the drafted effort clears it.
+  face.actions.setEffort('medium')
+  face.actions.setProvider('our-free-model')
+  check(
+    'unoffered effort is cleared on model switch',
+    face.store.get().draft.reasoningEffort === '',
+    face.store.get().draft.reasoningEffort
+  )
 }
 
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)
