@@ -31,8 +31,8 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const PREFIX = 'subagent-route-pin:'
-const DEFAULT_READY = join(homedir(), '.dsh', 'subagent-route-pin.ready.json')
+const PREFIX = 'delegation-hub:'
+const DEFAULT_READY = join(homedir(), '.dsh', 'delegation-hub.ready.json')
 const LOCAL_MANIFEST = new URL('../package.json', import.meta.url)
 
 /** Console contract: these lines are promises about the DSH seam. */
@@ -70,7 +70,7 @@ const localVersion = JSON.parse(readFileSync(LOCAL_MANIFEST, 'utf8')).version
 // to survive: "held back on an inject service" and "apply() threw" both leave the
 // previous record untouched, and this check used to pass in exactly those two
 // cases. The probe is rewritten on every boot, so it cannot go stale silently.
-const probePath = value('--probe', join(homedir(), '.dsh', 'subagent-route-pin.probe.json'))
+const probePath = value('--probe', join(homedir(), '.dsh', 'delegation-hub.probe.json'))
 // A record written by an older build says `note` where this one says `reason`,
 // and `error` where this one says `reason`. Reading only the new key turns the
 // one useful sentence into `undefined` — the verdict stays right, the diagnosis
@@ -193,7 +193,7 @@ ${readyPath} does not hold a record. Delete it, start DSH again, then re-run.
   process.exit(1)
 }
 
-if (record.plugin === 'subagent-route-pin') report('ok', 'plugin identity')
+if (record.plugin === 'delegation-hub') report('ok', 'plugin identity')
 else {
   report('MISS', 'plugin identity', JSON.stringify(record.plugin))
   missing += 1

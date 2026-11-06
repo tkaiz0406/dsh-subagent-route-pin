@@ -1,5 +1,5 @@
 /**
- * Offline harness for dsh-subagent-route-pin.
+ * Offline harness for dsh-delegation-hub.
  *
  * Drives `apply()` against a fake ctx so the route resolution, hot reload and
  * fallback paths are exercised without a running DSH profile:
@@ -20,9 +20,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, inject, teamInjectionCapabilities, wireAgencyProvider } from '../index.js'
 
-const HOOK = Symbol.for('dsh-subagent-route-pin.team-hook')
+const HOOK = Symbol.for('dsh-delegation-hub.team-hook')
 // Pre-0.8 path, still published so a caller that learned it keeps working.
-const LEGACY_HOOK = Symbol.for('dsh-subagent-route-pin.continuable-hook')
+const LEGACY_HOOK = Symbol.for('dsh-delegation-hub.continuable-hook')
 
 const dir = mkdtempSync(join(tmpdir(), 'route-pin-'))
 const settingsPath = join(dir, 'routes.json')
@@ -889,7 +889,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
   const record = JSON.parse(readFileSync(readinessPath, 'utf8'))
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-  check('readiness: record written', record.plugin === 'subagent-route-pin' && record.schema === 1, JSON.stringify(record))
+  check('readiness: record written', record.plugin === 'delegation-hub' && record.schema === 1, JSON.stringify(record))
   check('readiness: version matches the manifest', record.version === manifest.version, String(record.version))
   check('readiness: mounted', record.mounted === true)
   check('readiness: capabilities installed', record.capabilities.teamInjection === 'installed', JSON.stringify(record.capabilities))
@@ -1093,7 +1093,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   }
 
   // The bundle patch writes a loader entry whose `name` is the MODULE SPECIFIER,
-  // not the package directory. A bare "dsh-subagent-route-pin" cannot be resolved
+  // not the package directory. A bare "dsh-delegation-hub" cannot be resolved
   // by the loader, so the host plugin never mounts — while the settings card still
   // renders (the client bundle is discovered by scanning node_modules) and shows
   // empty provider/model dropdowns. That failure is invisible everywhere except
@@ -1394,7 +1394,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     readyForLogs,
     JSON.stringify({
       schema: 1,
-      plugin: 'subagent-route-pin',
+      plugin: 'delegation-hub',
       version: localPackage,
       at: new Date().toISOString(),
       mounted: true,
@@ -1565,7 +1565,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   writeFileSync(
     futureReady,
     JSON.stringify({
-      plugin: 'subagent-route-pin',
+      plugin: 'delegation-hub',
       version: manifestVersion,
       mounted: true,
       providerName: 'pinned-account',
@@ -1598,7 +1598,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   writeFileSync(
     noRouteReady,
     JSON.stringify({
-      plugin: 'subagent-route-pin',
+      plugin: 'delegation-hub',
       version: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
       mounted: true,
       capabilities: { teamInjection: 'installed', enabled: true, seams: ['startActivation'] },
@@ -1640,7 +1640,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   writeFileSync(
     badAtReady,
     JSON.stringify({
-      plugin: 'subagent-route-pin',
+      plugin: 'delegation-hub',
       version: localPackage,
       mounted: true,
       providerName: 'pinned-account',
@@ -1730,7 +1730,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   writeFileSync(
     oldReady,
     JSON.stringify({
-      plugin: 'subagent-route-pin',
+      plugin: 'delegation-hub',
       version: '0.0.1',
       mounted: true,
       capabilities: { teamInjection: 'installed', enabled: true, seams: ['startActivation'] },
@@ -1752,5 +1752,49 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
 }
 
 rmSync(dir, { recursive: true, force: true })
+
+// Group 41: rename integrity — the four default record file names must stay
+// distinct, and the README self-check commands must reference names the code
+// actually writes. Guards against a replacement accident writing a literal
+// `$1` (or any other collision) back into these paths.
+{
+  const indexSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const names = [
+    ...indexSource.matchAll(/'(delegation-hub\.(?:load|probe|ready|last-run)\.json)'/g),
+  ].map((m) => m[1])
+  check(
+    'rename: index.js declares all four distinct record names',
+    new Set(names).size === 4 && names.length === 4,
+    JSON.stringify(names)
+  )
+  check(
+    'rename: no literal $1 leaks into source',
+    !/\$1\.json/.test(indexSource) && !indexSource.includes('delegation-hub.$1'),
+    'index.js must not contain a literal $1 record name'
+  )
+  let readme = ''
+  try {
+    readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  } catch {}
+  const readmeNames = [...readme.matchAll(/delegation-hub\.(?:load|probe|ready|last-run)\.json/g)].map((m) => m[0])
+  const unknown = readmeNames.filter((n) => !names.includes(n))
+  check(
+    'rename: README references only record names the code writes',
+    readmeNames.length > 0 && unknown.length === 0,
+    `unknown=${JSON.stringify([...new Set(unknown)])}`
+  )
+  const logsSource = readFileSync(new URL('./logs.mjs', import.meta.url), 'utf8')
+  check(
+    'rename: logs.mjs defaults use the same record names',
+    !/\$1\.json/.test(logsSource) && logsSource.includes('delegation-hub.ready.json') && logsSource.includes('delegation-hub.probe.json'),
+    'logs.mjs default paths must match index.js'
+  )
+  check(
+    'rename: client page is 委派中枢 and no Expert-model copy remains',
+    !readme.includes('设置 → 专家模型') && !readme.includes('Expert model'),
+    'README must use the Delegation Hub page name'
+  )
+}
+
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)

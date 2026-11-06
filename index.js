@@ -1,5 +1,5 @@
 /**
- * dsh-subagent-route-pin — Host half.
+ * dsh-delegation-hub — Host half.
  *
  * Registers ONE extra subagent provider that delegates to an already-registered
  * provider (default `spawn`) while pinning the child LLM route. The framework
@@ -32,7 +32,7 @@
  * native delegation tool and Agent-Teams both call it), then `startContinuable`
  * (the older name) — and publishes a capability flag
  * (`{ teamInjection, enabled, seams, reason }`) on the service under
- * `Symbol.for('dsh-subagent-route-pin.team-hook')`, also readable through the
+ * `Symbol.for('dsh-delegation-hub.team-hook')`, also readable through the
  * pre-0.8 `…continuable-hook` symbol and through `teamInjectionCapabilities()`.
  * A caller that sees `unavailable` knows team members keep the parent route and
  * can degrade deliberately instead of trusting a log line; because `seams`
@@ -52,7 +52,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export const name = 'subagent-route-pin'
+export const name = 'delegation-hub'
 
 // Array form ONLY. Cordis reads `inject` as a service list; the `{ required, optional }`
 // object form is not supported by this runtime and makes it wait forever for services
@@ -90,9 +90,9 @@ const SUCCESS_CACHE_MS = 10 * 60 * 1000
 const FAILURE_CACHE_MS = 60 * 1000
 
 /** Marks the service object that already carries this plugin's team hook. */
-const CONTINUABLE_HOOK = Symbol.for('dsh-subagent-route-pin.continuable-hook')
+const CONTINUABLE_HOOK = Symbol.for('dsh-delegation-hub.continuable-hook')
 
-const PLUGIN = 'subagent-route-pin'
+const PLUGIN = 'delegation-hub'
 
 const DEFAULT_SETTINGS_PATH = join(homedir(), '.dsh', 'subagent-route-pin.json')
 
@@ -105,14 +105,14 @@ const DEFAULT_SETTINGS_PATH = join(homedir(), '.dsh', 'subagent-route-pin.json')
  * FAILS. A post-upgrade check therefore needs a file it can read: one small JSON
  * record per boot, overwritten each time.
  */
-const DEFAULT_READINESS_PATH = join(homedir(), '.dsh', 'subagent-route-pin.ready.json')
+const DEFAULT_READINESS_PATH = join(homedir(), '.dsh', 'delegation-hub.ready.json')
 
 /**
  * Last delegated run, overwritten on every start. The readiness record answers
  * "did the plugin mount"; this one answers "did the route I picked actually work",
  * which is the question a user asks after the model failed.
  */
-const RUN_RECORD_NAME = 'subagent-route-pin.last-run.json'
+const RUN_RECORD_NAME = 'delegation-hub.last-run.json'
 
 /** Plugin version, read once; a missing package.json is not fatal. */
 const PLUGIN_VERSION = (() => {
@@ -524,7 +524,7 @@ class RoutePinProvider {
     throw Object.assign(
       new Error(
         `${PLUGIN}: no route for expert ${JSON.stringify(label ?? null)} — ` +
-          `pick a model in Settings → 专家模型 (the plugin's own page), or put a "default" route in ${this.options.config.settingsPath}`
+          `pick a model in Settings → 委派中枢 (the plugin's own page), or put a "default" route in ${this.options.config.settingsPath}`
       ),
       { routeMissing: true }
     )
@@ -719,8 +719,8 @@ class RoutePinProvider {
           `${PLUGIN}: pinned route ${routeKey(route)} failed for label=${JSON.stringify(label ?? null)}: ${describeError(error)}`
         )
         const failure = new Error(
-          `专家模型 ${routeKey(route)} 调用失败：${describeError(error)}\n` +
-            `处理：打开 设置 → 专家模型 换一个可用模型（或在插件行把 onPinFailure 设为 inherit，允许失败时回退到主 agent 的模型）。`
+          `委派中枢 ${routeKey(route)} 调用失败：${describeError(error)}\n` +
+            `处理：打开 设置 → 委派中枢 换一个可用模型（或在插件行把 onPinFailure 设为 inherit，允许失败时回退到主 agent 的模型）。`
         )
         failure.cause = error
         throw failure
@@ -754,7 +754,7 @@ const TEAM_INJECTION_UNAVAILABLE = 'unavailable'
 const TEAM_SEAMS = ['startActivation', 'startContinuable']
 
 /** Marks the service object that already carries this plugin's team hook. */
-const TEAM_HOOK = Symbol.for('dsh-subagent-route-pin.team-hook')
+const TEAM_HOOK = Symbol.for('dsh-delegation-hub.team-hook')
 
 /**
  * Pre-0.8 symbol. Still published and still read, so a caller that learned the
@@ -1132,7 +1132,7 @@ export function teamInjectionCapabilities(service) {
  * This file separates the two, which is otherwise unknowable from outside.
  */
 function probePath() {
-  return process.env.DSH_ROUTE_PIN_PROBE_PATH || join(homedir(), '.dsh', 'subagent-route-pin.probe.json')
+  return process.env.DSH_ROUTE_PIN_PROBE_PATH || join(homedir(), '.dsh', 'delegation-hub.probe.json')
 }
 
 /**
@@ -1187,7 +1187,7 @@ function warnProbeFailure(ctx, error) {
 
 function markLoaded() {
   try {
-    const file = process.env.DSH_ROUTE_PIN_LOAD_PATH || join(homedir(), '.dsh', 'subagent-route-pin.load.json')
+    const file = process.env.DSH_ROUTE_PIN_LOAD_PATH || join(homedir(), '.dsh', 'delegation-hub.load.json')
     writeFileSync(
       file,
       `${JSON.stringify({ schema: 1, plugin: PLUGIN, version: PLUGIN_VERSION, at: new Date().toISOString(), node: process.version, processId: process.pid }, null, 2)}\n`

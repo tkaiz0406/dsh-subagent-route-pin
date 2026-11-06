@@ -43,9 +43,9 @@ const sandbox = {
 }
 runInNewContext(readFileSync(new URL('../client.js', import.meta.url), 'utf8'), sandbox)
 
-check('loader registration', loaded !== undefined && loaded.id === 'dsh-subagent-route-pin', loaded?.id)
+check('loader registration', loaded !== undefined && loaded.id === 'dsh-delegation-hub', loaded?.id)
 const module_ = loaded.factory(sandbox.require)
-check('module name', module_.name === 'subagent-route-pin', module_.name)
+check('module name', module_.name === 'delegation-hub', module_.name)
 check(
   'injects the client services it uses',
   ['slots', 'locale', 'remote', 'configForms'].every((name) => module_.inject.includes(name)),
@@ -140,7 +140,7 @@ function makeContext(options = {}) {
       }
     }
   }
-  state.forms = { 'subagent-route-pin': form }
+  state.forms = { 'delegation-hub': form }
   return { ctx, state }
 }
 
@@ -154,10 +154,10 @@ function makeContext(options = {}) {
     JSON.stringify(state.registered.map((entry) => entry.options?.name))
   )
   const page = state.registered[0]
-  check('page id', page.options.id === 'subagent-route-pin', page.options.id)
+  check('page id', page.options.id === 'delegation-hub', page.options.id)
   check('page is a component', typeof page.component === 'function')
-  check('page label resolves through the dictionary', page.options.label() === '专家模型', page.options.label())
-  check('page declares its locale', page.options.locale === 'settings.subagent-route-pin', page.options.locale)
+  check('page label resolves through the dictionary', page.options.label() === '委派中枢', page.options.label())
+  check('page declares its locale', page.options.locale === 'settings.delegation-hub', page.options.locale)
   check('subscriptions attached', state.events?.includes('llm/adapters-updated') === true, JSON.stringify(state.events))
   await new Promise((resolve) => setImmediate(resolve))
   check('catalog fetched once', state.catalogCalls === 1, String(state.catalogCalls))
@@ -169,7 +169,7 @@ function makeContext(options = {}) {
   let revision = 3
   const listeners = new Set()
   const { ctx, state } = makeContext()
-  state.forms['subagent-route-pin'] = {
+  state.forms['delegation-hub'] = {
     getSnapshot: () => ({ status: 'ready', writable: true, revision, value: current }),
     subscribe: (listener) => {
       listeners.add(listener)

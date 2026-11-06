@@ -69,7 +69,7 @@
       }
     },
     configForms: {
-      get: (namespace) => (namespace === 'subagent-route-pin' ? form : undefined),
+      get: (namespace) => (namespace === 'delegation-hub' ? form : undefined),
       whileServed: (namespaces, factory) => factory()
     },
     slots: {
@@ -109,7 +109,7 @@
   async function run() {
     try {
       const mod = window.__mod
-      check('module registered with loader', mod !== undefined && mod.id === 'dsh-subagent-route-pin', mod && mod.id)
+      check('module registered with loader', mod !== undefined && mod.id === 'dsh-delegation-hub', mod && mod.id)
       const face = mod.factory(requireStub)
       check('factory returns apply', typeof face.apply === 'function', typeof face.apply)
       face.apply(ctx)
@@ -119,14 +119,14 @@
       check('registers exactly one page', registered.length === 1, String(registered.length))
       const entry = registered[0]
       check('slot is settings.section', entry && entry.options.name === 'settings.section', entry && entry.options.name)
-      check('section id', entry && entry.options.id === 'subagent-route-pin', entry && entry.options.id)
+      check('section id', entry && entry.options.id === 'delegation-hub', entry && entry.options.id)
       check('section order', entry && entry.options.order === 36, entry && String(entry.options.order))
-      check('section label is localized', entry && entry.options.label() === '专家模型', entry && entry.options.label())
-      check('dictionaries registered', dictionaries['settings.subagent-route-pin'] !== undefined, JSON.stringify(Object.keys(dictionaries)))
+      check('section label is localized', entry && entry.options.label() === '委派中枢', entry && entry.options.label())
+      check('dictionaries registered', dictionaries['settings.delegation-hub'] !== undefined, JSON.stringify(Object.keys(dictionaries)))
       check('catalog requested once', catalogCalls.length === 1, String(catalogCalls.length))
 
       // render with a ready form
-      const tree = renderNode(entry, (key) => dictionaries['settings.subagent-route-pin'][key] || key)
+      const tree = renderNode(entry, (key) => dictionaries['settings.delegation-hub'][key] || key)
       const text = textOf(tree)
       check('render does not throw', tree !== undefined && tree.type === 'div', tree && String(tree.type))
       check('render shows provider label', text.includes('提供商'), text.slice(0, 120))

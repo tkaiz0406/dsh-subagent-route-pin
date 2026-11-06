@@ -1,7 +1,7 @@
 /**
- * dsh-subagent-route-pin — browser half.
+ * dsh-delegation-hub — browser half.
  *
- * Adds an "Expert model / 专家模型" page to Settings as a left-nav section
+ * Adds a "Delegation Hub / 委派中枢" page to Settings as a left-nav section
  * (`settings.section`), the same slot the "Our Free Model" page uses — the
  * "Plugins" page that `plugins.item` feeds is absent from some builds, which
  * left the card unreachable. The page edits
@@ -16,24 +16,24 @@
  */
 
 window.__ModuleLoader__.load({
-  id: 'dsh-subagent-route-pin',
+  id: 'dsh-delegation-hub',
   factory: (require) => {
     const React = require('react')
     const h = React.createElement
 
     /** Dictionary namespace of this page. */
-    const NS = 'settings.subagent-route-pin'
+    const NS = 'settings.delegation-hub'
     /**
      * Config-form namespaces to try, in order: the explicit row id this bundle
      * inserts, then the package-derived id the loader may fall back to.
      */
-    const CONFIG_NS_CANDIDATES = ['subagent-route-pin', 'dsh-subagent-route-pin']
+    const CONFIG_NS_CANDIDATES = ['delegation-hub', 'dsh-delegation-hub']
     const EFFORTS = ['low', 'medium', 'high']
 
     const zh = {
-      title: '专家模型',
+      title: '委派中枢',
       description:
-        '专家团与显式使用 pinned-account 的子代理跑在这个模型上；大脑模型不受影响。保存后下一次召唤即生效，无需重启。',
+        '专家团专家、Agent Teams 成员、单发子代理统一钉在这条模型路由上；大脑模型不受影响。保存后下一次委派即生效，无需重启。',
       provider: '提供商',
       model: '模型',
       effort: '推理强度',
@@ -62,9 +62,9 @@ window.__ModuleLoader__.load({
         '需要 API Key 的提供方请到 设置 → 模型 里配置，随后会出现在这里。个别专家单独指定模型：编辑 ~/.dsh/subagent-route-pin.json 的 experts 字段（可选）。'
     }
     const en = {
-      title: 'Expert model',
+      title: 'Delegation Hub',
       description:
-        'Agency experts and explicit pinned-account subagents run on this model; the main agent is unaffected. Saved for the next delegation, no restart needed.',
+        'Agency experts, Agent-Teams members, and one-shot subagents all run on this pinned route; the main agent is unaffected. Saved for the next delegation, no restart needed.',
       provider: 'Provider',
       model: 'Model',
       effort: 'Reasoning effort',
@@ -441,7 +441,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ExpertModelCard(props) {
+    function DelegationHubCard(props) {
       const t = props.t
       const face = props.face
       const state = React.useSyncExternalStore(face.store.subscribe, face.store.get, face.store.get)
@@ -590,19 +590,19 @@ window.__ModuleLoader__.load({
       const t = ctx.locale.bind(NS)
       ctx.effect(
         () => ctx.locale.register(NS, { zh, en }),
-        'subagent-route-pin: dictionaries'
+        'delegation-hub: dictionaries'
       )
       const controller = createController(ctx)
       const face = { store: controller.store, actions: controller.actions }
-      ctx.effect(() => () => controller.actions.dispose(), 'subagent-route-pin: form subscription')
+      ctx.effect(() => () => controller.actions.dispose(), 'delegation-hub: form subscription')
       const onRemote = (event, handler) => {
         const subscribe = ctx.remote?.$on
         return typeof subscribe === 'function' ? subscribe.call(ctx.remote, event, handler) : () => {}
       }
-      ctx.effect(() => onRemote('llm/adapters-updated', () => controller.actions.retryCatalog()), 'subagent-route-pin: adapter invalidations')
+      ctx.effect(() => onRemote('llm/adapters-updated', () => controller.actions.retryCatalog()), 'delegation-hub: adapter invalidations')
       ctx.effect(
         () => onRemote('settings/document-updated', () => controller.actions.retryCatalog()),
-        'subagent-route-pin: settings invalidations'
+        'delegation-hub: settings invalidations'
       )
       // Unconditional: the page must exist even before (or without) a served
       // config form, because that form lives on the Plugins page this build may
@@ -613,18 +613,18 @@ window.__ModuleLoader__.load({
             ctx.slots.register(
               {
                 name: 'settings.section',
-                id: 'subagent-route-pin',
+                id: 'delegation-hub',
                 order: 36,
                 label: () => t('title'),
                 locale: NS
               },
-              (props) => h(ExpertModelCard, Object.assign({}, props, { face, t }))
+              (props) => h(DelegationHubCard, Object.assign({}, props, { face, t }))
             )
           ),
-        'subagent-route-pin: settings section'
+        'delegation-hub: settings section'
       )
     }
 
-    return { apply, inject, name: 'subagent-route-pin' }
+    return { apply, inject, name: 'delegation-hub' }
   }
 })

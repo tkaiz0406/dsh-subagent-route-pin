@@ -1,4 +1,4 @@
-﻿# dsh-subagent-route-pin
+# dsh-delegation-hub
 
 给被委派的子代理（专家团专家、Agent Teams 成员、单发子代理）单独指定 LLM 路由，主 agent 不受影响。
 
@@ -16,21 +16,22 @@
 - **零配置可用**：没配路由、或路由指向一个当前不存在的 provider/model 时，子 agent 继承主 agent 的模型，召唤不会失败
 - **失败必提示**（`onPinFailure`，默认 `fail`）：你在设置页选过模型、它却跑不起来时，召唤直接报错并在错误里写明「哪个路由失败、为什么、去哪里改」，绝不静默换成别的模型；设成 `inherit` 才允许回退
 - **自动接线**（`autoWireAgency`，默认开）：挂载时把 profile 里 `agency-agents` 行的 `provider` 补成 `pinned-account`（改前留 `.bak-autowire-*` 备份，已接线则不动），装完不需要手改 YAML
-- 每次委派的结果写进 `~/.dsh/subagent-route-pin.last-run.json`（`pinned` / `failed` + 原因），排障不用翻日志
-- 设置 → **专家模型** 页面：提供商 / 模型 / 推理强度下拉 + 团队模式注入开关 + 专家团引擎提示，保存写回 profile 补丁，下一次委派生效
+- 每次委派的结果写进 `~/.dsh/delegation-hub.last-run.json`（`pinned` / `failed` + 原因），排障不用翻日志
+- 设置 → **委派中枢** 页面：提供商 / 模型 / 推理强度下拉 + 团队模式注入开关 + 专家团引擎提示，保存写回 profile 补丁，下一次委派生效
 - 逐专家覆盖：`~/.dsh/subagent-route-pin.json` 的 `experts` 字段（可选，优先级高于页面）
+- **兼容保留的旧名**（故意不改，避免静默丢失已配置的路由）：用户设置文件 `~/.dsh/subagent-route-pin.json` 与环境变量 `DSH_ROUTE_PIN_*` 沿用旧名；插件本身、探针记录、页面均已改名
 
 ## 安装
 
 ```bash
 # 从 tarball
-dsh plugin --profile desktop add "./dsh-subagent-route-pin-0.8.21.tgz"
+dsh plugin --profile desktop add "./dsh-delegation-hub-0.9.0-alpha.1.tgz"
 
 # 从 npm（发布后）
-dsh plugin --profile desktop add "dsh-subagent-route-pin"
+dsh plugin --profile desktop add "dsh-delegation-hub"
 
 # 从本地目录（开发调试，link 安装）
-dsh plugin --profile desktop add "D:\\path\\to\\dsh-subagent-route-pin"
+dsh plugin --profile desktop add "D:\\path\\to\\dsh-delegation-hub"
 ```
 
 `dsh plugin` 要写 profile 目录，通常需要提权（关闭沙箱或以同一用户直接运行终端）。
@@ -40,21 +41,21 @@ dsh plugin --profile desktop add "D:\\path\\to\\dsh-subagent-route-pin"
 - profile 的 `cordis.patch.yml` 按 `name` 匹配 `cordis.yml` 的基础条目，**不一致整条被跳过**（该行配置静默失效）；
 - loader 拿这个字符串去 `node_modules` 里解析，**解析不到就静默不加载**——设置页那张卡片还在（客户端代码是单独扫描 `node_modules` 得到的，独立于宿主加载），但供应商/模型两个下拉是空的、推理强度停在第一项 `low`，也没有就绪记录。
 
-「装上了但什么都没生效」基本都出在这。典型冲突：profile 用带 scope 的依赖键装（`node_modules/@owner/dsh-subagent-route-pin`），而包名是裸名 `dsh-subagent-route-pin` → 裸名解析不到。两种解法二选一：把依赖键改成包名本身，或在 `node_modules` 里给裸名建一个指向实际目录的 junction（Windows `New-Item -ItemType Junction`，不需要管理员）。
+「装上了但什么都没生效」基本都出在这。典型冲突：profile 用带 scope 的依赖键装（`node_modules/@owner/dsh-delegation-hub`），而包名是裸名 `dsh-delegation-hub` → 裸名解析不到。两种解法二选一：把依赖键改成包名本身，或在 `node_modules` 里给裸名建一个指向实际目录的 junction（Windows `New-Item -ItemType Junction`，不需要管理员）。
 
 自检两行即可分辨：
 
 ```bash
-node -e "require('dsh-subagent-route-pin/package.json')"   # 能解析 → 名字对
-cat ~/.dsh/subagent-route-pin.load.json                   # 有这个 → 模块被 import 了（apply 不一定跑）
-cat ~/.dsh/subagent-route-pin.ready.json                  # 有且 at 是本次启动 → 宿主真的激活了插件
+node -e "require('dsh-delegation-hub/package.json')"   # 能解析 → 名字对
+cat ~/.dsh/delegation-hub.load.json                   # 有这个 → 模块被 import 了（apply 不一定跑）
+cat ~/.dsh/delegation-hub.ready.json                  # 有且 at 是本次启动 → 宿主真的激活了插件
 ```
 
 装完后 profile 的 `cordis.patch.yml` 里新增一行（包内 `cordis.patch.yml` 已自带，无需手写）。`provider` 留空即「不钉路由」，子 agent 继承主 agent 的模型：
 
 ```yaml
-- id: subagent-route-pin
-  name: "dsh-subagent-route-pin"
+- id: delegation-hub
+  name: "dsh-delegation-hub"
   config:
     providerName: pinned-account
     baseProvider: spawn
@@ -73,7 +74,7 @@ cat ~/.dsh/subagent-route-pin.ready.json                  # 有且 at 是本次�
 
 想把子 agent 分到另一条车道，只需要两处：
 
-1. **这条路由** —— `provider` / `model`，指向你账号里真实存在的组合。不用手改文件：打开 设置 → 专家模型，点选后保存即可（写回同一行）。
+1. **这条路由** —— `provider` / `model`，指向你账号里真实存在的组合。不用手改文件：打开 设置 → 委派中枢，点选后保存即可（写回同一行）。
 2. **专家团那行的 `provider`** —— 改成 `pinned-account`，否则专家根本不经过本插件。
 
 除此之外没有第三处。团队模式（Agent Teams）不走这条路径，见下文。
@@ -128,11 +129,11 @@ dsh-team-status --serve --port 7800
 
 重启 DSH 后：
 
-1. 设置 → 专家模型 页面出现，底部显示「专家团引擎」
-2. 日志出现 `subagent-route-pin: provider "pinned-account" delegates to "spawn"`
-3. 日志出现 `subagent-route-pin: team-mode hook installed on ctx.subagents.startActivation`
-4. 日志出现 `subagent-route-pin: capabilities {"teamInjection":"installed","enabled":true,"seams":["startActivation"]}`
-5. 委派时出现 `subagent-route-pin: team member label="…" -> provider/model`
+1. 设置 → 委派中枢 页面出现，底部显示「专家团引擎」
+2. 日志出现 `delegation-hub: provider "pinned-account" delegates to "spawn"`
+3. 日志出现 `delegation-hub: team-mode hook installed on ctx.subagents.startActivation`
+4. 日志出现 `delegation-hub: capabilities {"teamInjection":"installed","enabled":true,"seams":["startActivation"]}`
+5. 委派时出现 `delegation-hub: team member label="…" -> provider/model`
 
 **这五行是接口契约，不是装饰**：第 2 行说明 provider 包装还挂得上，第 3、4 行说明创建子代理的那条缝还在（`seams` 会写出实际包住的方法名），第 5 行说明注入实际生效。升级 DSH 后少任何一行，都说明上游接口变了，先别怪额度。
 
@@ -145,12 +146,12 @@ npm run verify        # = node test/run.mjs && node test/logs.mjs --strict
 npm run ready         # 只看盘上的就绪记录，不跑测试
 ```
 
-就绪记录：`~/.dsh/subagent-route-pin.ready.json`
+就绪记录：`~/.dsh/delegation-hub.ready.json`
 
 ```json
 {
   "schema": 1,
-  "plugin": "subagent-route-pin",
+  "plugin": "delegation-hub",
   "version": "0.8.13",
   "at": "2026-10-20T12:04:11.208Z",
   "mounted": true,
@@ -168,7 +169,7 @@ npm run ready         # 只看盘上的就绪记录，不跑测试
 }
 ```
 
-`route` / `routeSource` 是**当前真正生效**的路由。优先级是 `experts[专家名]` → 配置行（设置页写的那个）→ 设置文件的 `default`；配置行一旦有值，`~/.dsh/subagent-route-pin.json` 里的 `default` 就会被盖住，记录里用 `settingsDefaultShadowed: true` 明确标出来，同时打一条 WARN——否则「我改了 JSON 但模型没变」在外部完全查不出原因。
+`route` / `routeSource` 是**当前真正生效**的路由。优先级是 `experts[专家名]` → 配置行（设置页写的那个）→ 设置文件的 `default`；配置行一旦有值，`~/.dsh/subagent-route-pin.json`（兼容保留的旧设置文件名）里的 `default` 就会被盖住，记录里用 `settingsDefaultShadowed: true` 明确标出来，同时打一条 WARN——否则「我改了 JSON 但模型没变」在外部完全查不出原因。
 
 `test/logs.mjs` 校验：插件身份、版本与本地 `package.json` 一致、是否挂载、能力标志、**实际挂住的接缝**（`seams` 里没有 `startActivation` 会 WARN：那说明这个构建可能根本不调被包住的方法）、回退开关、`providerName -> baseProvider`、**生效路由与来源**（`settingsDefaultShadowed` 为真时 WARN 点名被盖住的那个值）、记录龄（超过 7 天提示重启 DSH）。探针文件里出现 `null`、数组、标量或解析不了的 JSON 一律判失败（`unreadable` / `not an object`）：「磁盘上有记录但读不出裁决」等于证据丢了，不能当成「已验证挂载」，这条判断**不随 `--strict` 变化**。`--strict` 只额外把 `teamInjection: 'unavailable'` 判失败——发版前该用这个。
 
@@ -200,12 +201,12 @@ node test/logs.mjs --log captured-console.txt
 
 | DSH / `@deepseek-ai/dsh-tool-subagent` | 状态 | 说明 |
 | --- | --- | --- |
-| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 当前 `peerDependencies` 写的范围，`0.2.1-rc.2`、`0.2.1-rc.3` 实测 174 项断言全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
+| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 当前 `peerDependencies` 写的范围，`0.2.1-rc.2`、`0.2.1-rc.3` 实测 196 项断言全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
 | `0.2.1-rc.3` | ✅ 已验证 | 桌面端 0.2.1-rc.3 上 readiness 记录显示 `seams: ["startActivation"]`、`teamInjection: installed`，配置行路由生效 |
 | `0.2.0-rc.x` | ❓ 未验证 | 接口面看起来一致（旧版走 `startContinuable`），但没跑过；装了会看到 peer 警告 |
 | `>= 0.4.0` | ⚠️ 未验证 | 超出 peer 范围，DSH 插件管理器会标「异常」并拒绝启动；上游一旦改动 provider 或创建子代理的接缝，日志会先缺，插件按能力标志降级 |
 
-`peerDependencies` 从「钉死单个 `0.2.1-rc.2`」放宽到 `>=0.2.0-rc.1 <0.4.0`：DSH 每次发 rc 都不再让这个插件被判不兼容、也不会因此被插件管理器拦下。范围上限留在 `0.4.0`，是因为 provider 和创建子代理的接缝属于内部契约，跨 minor 需要重新验证——发版前请跑 `npm test`（174 项断言）与 `npm run ready`（真实宿主上的 readiness）。
+`peerDependencies` 从「钉死单个 `0.2.1-rc.2`」放宽到 `>=0.2.0-rc.1 <0.4.0`：DSH 每次发 rc 都不再让这个插件被判不兼容、也不会因此被插件管理器拦下。范围上限留在 `0.4.0`，是因为 provider 和创建子代理的接缝属于内部契约，跨 minor 需要重新验证——发版前请跑 `npm test`（196 项断言）与 `npm run ready`（真实宿主上的 readiness）。
 
 同一个范围还写在 `package.json` 的 `engines.dsh` 里，两处**必须逐字相同**（`npm test` 会比对，改一处不改另一处会红）：
 
@@ -229,7 +230,7 @@ node test/logs.mjs --log captured-console.txt
 读取能力标志（宿主侧）：
 
 ```js
-import { teamInjectionCapabilities } from 'dsh-subagent-route-pin'
+import { teamInjectionCapabilities } from 'dsh-delegation-hub'
 
 // { teamInjection: 'installed' | 'unavailable', enabled?: boolean, seams: string[], reason?: string }
 const capability = teamInjectionCapabilities(ctx.subagents)
@@ -239,19 +240,19 @@ if (capability.teamInjection === 'unavailable') {
 // seams 是实际包住的方法名：['startActivation'] 表示当前构建真的会走到它
 ```
 
-同一份结果也挂在 `ctx.subagents[Symbol.for('dsh-subagent-route-pin.team-hook')].capabilities` 上；0.8 之前的 `…continuable-hook` 符号仍然读写，旧调用方不用改。
+同一份结果也挂在 `ctx.subagents[Symbol.for('dsh-delegation-hub.team-hook')].capabilities` 上；0.8 之前的 `…continuable-hook` 符号仍然读写，旧调用方不用改。
 
 `teamInjection` 依赖接缝方法可被定义 own property；若 DSH 后续冻结该服务对象，插件置 `unavailable` 并退化为「仅单发子代理可控」。
 
 ## 测试
 
 ```bash
-node test/run.mjs        # 174 项断言，不需要 DSH 在跑
+node test/run.mjs        # 196 项断言，不需要 DSH 在跑
 node test/logs.mjs       # 检查真实启动留下的就绪记录
 npm run verify           # 两个一起，且 --strict
 ```
 
-174 项断言：路由优先级、文件热读、strict 校验、团队注入、覆盖团队成员自带路由（默认覆盖 / `overrideMemberRoute: false` 时尊重 / 保留调用方其他字段 / 丢弃旧路由的 effort / 覆盖失败退回调用方原路由）、开关关闭、缺路由不阻断、dispose 还原、重复挂载换路由、能力标志（installed / unavailable / 无任何接缝）、多接缝（只有 `startActivation` / 只有 `startContinuable` / 两条都在时优先前者且只注入一次）、启动失败回退（单发 / 团队 / 关闭开关 / 重试仍失败 / 同路由不重试）、日志契约、就绪记录（正常挂载 / 缺服务 / 版本一致 / 生效路由与来源 / 设置文件 default 被配置行盖住时报警 / 缺路由字段时 WARN 而不是打印 `undefined -> undefined` / 未来时间戳不报健康年龄）、激活探针（成功覆盖陈旧 parked / 版本与 package.json 严格相等 / 拒绝挂载时记 `degraded` 而非 `applied` / 只 import 不 apply 记 `parked` / `apply()` 抛错记 `failed` 且保留原文 / 四个相位都带 `mounted` 与 `invoked` / 冒烟检查读旧 schema 的 `note`/`error` 不丢原因 / 空字符串理由会落到旧字段 / 过旧探针报版本与年龄 / 损坏 JSON 记 `unreadable` 且不冒充「未被 import」/ 非对象记录同样判失败且判定不随 `--strict` 变化 / 未来时间戳不报健康年龄 / 探针缺失判失败而不是「删掉就过」 / 版本不一致判 `MISS` 而不是先给绿灯 / 就绪记录为非对象时判失败且不崩栈、判定与损坏 JSON 一致）、发包元数据（engines.dsh 与 peer 范围一致 / bin 路径无前导 ./ 且文件存在 / 包内 cordis.patch.yml 的 name 指向本包且是可解析的模块路径）。
+196 项断言：路由优先级、文件热读、strict 校验、团队注入、覆盖团队成员自带路由（默认覆盖 / `overrideMemberRoute: false` 时尊重 / 保留调用方其他字段 / 丢弃旧路由的 effort / 覆盖失败退回调用方原路由）、开关关闭、缺路由不阻断、dispose 还原、重复挂载换路由、能力标志（installed / unavailable / 无任何接缝）、多接缝（只有 `startActivation` / 只有 `startContinuable` / 两条都在时优先前者且只注入一次）、启动失败回退（单发 / 团队 / 关闭开关 / 重试仍失败 / 同路由不重试）、日志契约、就绪记录（正常挂载 / 缺服务 / 版本一致 / 生效路由与来源 / 设置文件 default 被配置行盖住时报警 / 缺路由字段时 WARN 而不是打印 `undefined -> undefined` / 未来时间戳不报健康年龄）、激活探针（成功覆盖陈旧 parked / 版本与 package.json 严格相等 / 拒绝挂载时记 `degraded` 而非 `applied` / 只 import 不 apply 记 `parked` / `apply()` 抛错记 `failed` 且保留原文 / 四个相位都带 `mounted` 与 `invoked` / 冒烟检查读旧 schema 的 `note`/`error` 不丢原因 / 空字符串理由会落到旧字段 / 过旧探针报版本与年龄 / 损坏 JSON 记 `unreadable` 且不冒充「未被 import」/ 非对象记录同样判失败且判定不随 `--strict` 变化 / 未来时间戳不报健康年龄 / 探针缺失判失败而不是「删掉就过」 / 版本不一致判 `MISS` 而不是先给绿灯 / 就绪记录为非对象时判失败且不崩栈、判定与损坏 JSON 一致）、发包元数据（engines.dsh 与 peer 范围一致 / bin 路径无前导 ./ 且文件存在 / 包内 cordis.patch.yml 的 name 指向本包且是可解析的模块路径）。
 
 `test/run.mjs` 证明的是**插件逻辑没坏**；`test/logs.mjs` 证明的是**它在这个 DSH 构建里还挂着**。两件事会分别失败，上游接口变更先体现在后者。
 
@@ -260,7 +261,7 @@ npm run verify           # 两个一起，且 --strict
 升级 DSH 后按这个顺序走，别跳步：
 
 ```bash
-node test/run.mjs                 # 1. 逻辑层：128 项还绿吗
+node test/run.mjs                 # 1. 逻辑层：196 项还绿吗
 # 2. 重启 DSH（只改插件不用，改 DSH 本体必须）
 npm run ready                     # 3. 挂载层：就绪记录还是这次启动写的吗
 ```
@@ -269,7 +270,7 @@ npm run ready                     # 3. 挂载层：就绪记录还是这次启�
 
 ## 发布
 
-包名是**不带 scope** 的 `dsh-subagent-route-pin`（npm 上确认未被占用），因此不需要拥有任何 npm 组织/scope，登录任意账号即可发布：
+包名是**不带 scope** 的 `dsh-delegation-hub`（npm 上确认未被占用），因此不需要拥有任何 npm 组织/scope，登录任意账号即可发布：
 
 ```bash
 npm login --registry=https://registry.npmjs.org/
@@ -281,7 +282,7 @@ pnpm pack --pack-destination dist
 >
 > 发布前先跑 `npm publish --dry-run --registry=https://registry.npmjs.org/`，确认 `Publishing to https://registry.npmjs.org/` 且**没有任何 `npm warn`**——`bin` 路径写成 `./bin/x.mjs` 这类问题只在 warn 里出现，`publish` 照样 exit 0，发出去的包里却没有命令。
 
-> 若以后要改到自己的 scope（例如 `@yourname/dsh-subagent-route-pin`），必须同时改这 **4 处**，少一处就会出现「装上了但不加载」：
+> 若以后要改到自己的 scope（例如 `@yourname/dsh-delegation-hub`），必须同时改这 **4 处**，少一处就会出现「装上了但不加载」：
 >
 > | # | 位置 | 作用 |
 > | --- | --- | --- |
@@ -292,15 +293,15 @@ pnpm pack --pack-destination dist
 >
 > 另需同步 `test/client.mjs`、`test/browser-harness.html` 里的 id 断言，以及 README 里的安装示例。
 
-GitHub 仓库名与 npm 包名保持一致（`dsh-subagent-route-pin`），仓库归属 `tkaiz0406` 是 GitHub 账号，与 npm scope 无关，`repository`/`homepage`/`bugs` 无需随 npm 改名。
+GitHub 仓库名与 npm 包名保持一致（`dsh-delegation-hub`），仓库归属 `tkaiz0406` 是 GitHub 账号，与 npm scope 无关，`repository`/`homepage`/`bugs` 无需随 npm 改名。
 
 ## 回滚
 
 ```bash
-dsh plugin --profile desktop remove "dsh-subagent-route-pin"
+dsh plugin --profile desktop remove "dsh-delegation-hub"
 ```
 
-或删掉 profile `cordis.patch.yml` 里 `id: subagent-route-pin` 那一行。
+或删掉 profile `cordis.patch.yml` 里 `id: delegation-hub` 那一行。
 
 ## License
 

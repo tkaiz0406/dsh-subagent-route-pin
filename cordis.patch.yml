@@ -1,20 +1,21 @@
-# 子 agent / 专家模型路由固定（dsh-subagent-route-pin）。
+# 子 agent / 专家模型路由固定（dsh-delegation-hub）。
 # 本文件是"包内默认行"：profile 的 cordis.patch.yml 里若已有同 id 行，以 profile 为准。
 # 专家（agency-agents）通过 provider: pinned-account 命中本插件注册的包装 provider，
 # 由 provider/model 两行固定它们实际调用的 LLM 路由；大脑（主 agent）不受影响。
 # 团队模式（Agent Teams）成员不经过 provider.start，
 # 由本插件在 subagents.startActivation 上补 agentOptions，同样固定到这条路由。
 #
-# 界面编辑：设置 → 专家模型（左侧导航）。provider 与 model 在插件挂载时被快照，
-# 因此保存后需要一次重挂载才生效（改本文件任一个值，或重启 DSH）。
+# 界面编辑：设置 → 委派中枢（左侧导航）。provider 与 model 在插件挂载时被快照，
+# provider/model 以 volatile accessor 读取：设置页保存后下一次委派即生效；
+# 手改本文件需要重启 DSH 重读。
 - insert:
-    - id: subagent-route-pin
+    - id: delegation-hub
       # name 是 DSH loader 的模块解析键，必须与 package.json 的 name 逐字一致：
       # profile 的 cordis.patch.yml 按 name 匹配 cordis.yml 的基础条目，不一致整条被跳过；
       # loader 又拿这个字符串去 node_modules 里解析，解析不到就**静默不加载**——
       # 设置页卡片还在（客户端单独扫描 node_modules），但两个下拉是空的。
       # 装完后自检：node -e "require('<这个 name>/package.json')" 必须成功。
-      name: 'dsh-subagent-route-pin'
+      name: 'dsh-delegation-hub'
       config:
         # 注册的包装 provider 名；agency-agents 的 provider 必须与它一致。
         providerName: pinned-account
