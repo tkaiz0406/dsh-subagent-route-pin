@@ -60,7 +60,7 @@ function makeHarness(config, extraCtx = {}) {
   const service = Object.create({
     async startActivation(spec) {
       teamCalls.push(spec)
-      return { ok: true, spec }
+      return startedActivation ?? { ok: true, spec }
     }
   })
   service.getProvider = (name) => (name === 'spawn' ? base : undefined)
@@ -84,8 +84,9 @@ function makeHarness(config, extraCtx = {}) {
   }
   apply(ctx, { settingsPath, readinessPath, ...config })
   if (registered.length !== 1) throw new Error(`expected one registered provider, got ${registered.length}`)
-  return { provider: registered[0], calls, logs, service, teamCalls }
+  return { provider: registered[0], calls, logs, service, teamCalls, setActivation: (value) => { startedActivation = value } }
 }
+let startedActivation = undefined
 
 let failures = 0
 function check(label, condition, detail) {
@@ -497,7 +498,90 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   check('teamInjection false leaves the member on the parent route', spec.request.agentOptions === undefined)
 }
 
-// --- 18b. role-based routes from the Agent-Teams state file --------------
+// --- 18c. runtime failover watches the live child and swaps once ----------
+{
+  const watched = []
+  const childListeners = []
+  let failoverRequestListener = undefined
+  const childCtx = {
+    logger: { warn: (message) => {} },
+    on(event, listener) {
+      if (event === 'agent/request-error') childListeners.push(listener)
+      if (event === 'agent/request') failoverRequestListener = listener
+      return () => {}
+    }
+  }
+  const childAgent = { ctx: childCtx }
+  const agentsRegistry = {
+    get: (id) => (id === 'child-1' ? childAgent : undefined)
+  }
+  const harness = makeHarness(
+    { provider: 'deepseek-account', model: 'deepseek-flash', failoverRoute: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } },
+    { agents: agentsRegistry }
+  )
+  harness.setActivation({ childId: 'child-1', ok: true })
+  const spec = { label: 'agent-teams:t1:builder', request: { prompt: 'do', parent: {} } }
+  await harness.service.startActivation(spec)
+  check('failover watcher registered on the child context', childListeners.length === 1, String(childListeners.length))
+  // A lane failure triggers the switch: the request rewriter is installed.
+  // Clear the record left by earlier groups so this assertion reads only the
+  // failover entry.
+  rmSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), { force: true })
+  await childListeners[0]({ failure: { code: 'QUOTA' } }, async () => ({ kind: 'retry' }))
+  check(
+    'lane failure installs the request rewriter',
+    typeof failoverRequestListener === 'function',
+    String(typeof failoverRequestListener)
+  )
+  check(
+    'failover run record written',
+    (() => {
+      try {
+        const record = JSON.parse(readFileSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), 'utf8'))
+        return record.outcome === 'failover' && record.channel === 'team' && record.reason === 'QUOTA'
+      } catch {
+        return false
+      }
+    })()
+  )
+  check(
+    'failover switch is logged',
+    harness.logs.some(([, message]) => message.includes('failover route our-free-model/deepseek-v4.1-flash-free')),
+    JSON.stringify(harness.logs.filter(([, message]) => message.includes('failover')).at(-1))
+  )
+  // The rewriter swaps provider/model and drops the inherited effort.
+  const resolved = await failoverRequestListener(
+    { agent: childAgent },
+    async () => ({ provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'high', maxTokens: 4096 })
+  )
+  check(
+    'rewriter swaps to the failover route and drops effort',
+    resolved.provider === 'our-free-model' && resolved.model === 'deepseek-v4.1-flash-free' && resolved.reasoningEffort === undefined,
+    JSON.stringify(resolved)
+  )
+  // A second lane failure must not double-switch: the rewriter stays installed.
+  failoverRequestListener = undefined
+  await childListeners[0]({ failure: { code: 'AUTH' } }, async () => ({ kind: 'retry' }))
+  check('second lane failure does not re-install the rewriter', failoverRequestListener === undefined)
+  // A non-lane code never triggers anything.
+  await childListeners[0]({ failure: { code: 'TIMEOUT' } }, async () => ({ kind: 'retry' }))
+  check('non-lane code keeps the route untouched', failoverRequestListener === undefined)
+}
+
+// --- 18d. failover degrades silently without the agents registry ---------
+{
+  const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash', failoverRoute: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } })
+  harness.setActivation({ childId: 'child-2', ok: true })
+  let threw
+  try {
+    await harness.service.startActivation({ label: 'x', request: { prompt: 'do', parent: {} } })
+  } catch (error) {
+    threw = error
+  }
+  check('missing agents registry never breaks a delegation', threw === undefined, threw && threw.message)
+}
+
+
 {
   // A durable team state like the real plugin writes: members carry `role`.
   const teamDir = join(dir, '.agent-teams', 'team-r1')
@@ -1250,8 +1334,8 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   )
   check(
     'only services the plugin cannot run without are required',
-    requiredServices.length === 1 && requiredServices[0] === 'subagents',
-    `inject=${JSON.stringify(inject)} - expect required ['subagents'] and llm optional`
+    requiredServices.length === 2 && requiredServices[0] === 'subagents' && requiredServices[1] === 'agents',
+    `inject=${JSON.stringify(inject)} - expect required ['subagents','agents'] (agents powers the runtime failover watcher)`
   )
 }
 

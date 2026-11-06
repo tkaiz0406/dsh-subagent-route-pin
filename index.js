@@ -61,7 +61,7 @@ export const name = 'delegation-hub'
 //
 // `llm` is deliberately NOT listed: it is only read by the best-effort route check, whose
 // call site is wrapped in try/catch, so a build without it must degrade, not park.
-export const inject = ['subagents']
+export const inject = ['subagents', 'agents']
 
 /**
  * Activation probe. `load.json` proves only that the entry file was imported; it
@@ -201,6 +201,13 @@ function makeConfig(z) {
       // `memberLlmProvider` / `memberModel`, so "only fill an empty slot" would
       // never pin a single team member. Default on: the pinned route wins.
       overrideMemberRoute: z.boolean().default(true).volatile(),
+      // Runtime failover (running-delegation lane): when a pinned child hits a
+      // lane failure mid-flight (quota drained, auth revoked, adapter gone),
+      // its next requests are rewritten to this route once. Distinct from
+      // `fallback` (start-time only). Absent = the feature is off.
+      failoverRoute: z
+        .object({ provider: z.string().min(1), model: z.string().min(1) })
+        .volatile(),
       provider: z.string().volatile(),
       model: z.string().volatile(),
       reasoningEffort: z.string().volatile(),
@@ -850,6 +857,13 @@ function publishUnavailable(service, reason) {
 }
 
 /**
+ * Lane failure codes that justify a runtime failover, mirroring
+ * @nanmicoder/dsh-agent-teams FALLBACK_FAILURE_CODES: the lane is exhausted,
+ * unauthorized, or gone — not a transient model error.
+ */
+const FAILOVER_FAILURE_CODES = new Set(['QUOTA', 'RATE_LIMIT', 'AUTH', 'MISSING_CREDENTIAL', 'NO_ADAPTER'])
+
+/**
  * Team-mode hook, behind an adapter.
  *
  * Continuable children (Agent-Teams members, agency's native engine) never pass
@@ -1066,7 +1080,33 @@ class TeamInjectionAdapter {
         ctx.logger.warn(`${PLUGIN}: team member route injection skipped: ${describeError(error)}`)
       }
       try {
-        return await entry.raw.call(service, spec)
+        const started = await entry.raw.call(service, spec)
+        // Runtime failover: once the child is live, watch its request errors.
+        // A lane failure (quota/auth/adapter) rewrites the child's subsequent
+        // requests to the failover route exactly once. Requires the `agents`
+        // registry (injected at the apply site); every unavailable piece
+        // degrades to plain observation-by-absence — no watcher, no crash.
+        try {
+          const own = slot.options ?? {}
+          const failover = valueOf(own.failoverRoute)
+          if (
+            failover !== undefined &&
+            failover !== null &&
+            typeof failover === 'object' &&
+            typeof failover.provider === 'string' &&
+            failover.provider !== '' &&
+            typeof failover.model === 'string' &&
+            failover.model !== '' &&
+            started !== null &&
+            typeof started === 'object' &&
+            typeof started.childId === 'string'
+          ) {
+            slot.adapter.armFailover(started.childId, { provider: failover.provider, model: failover.model }, spec.label, pinnedInstance?.recordRun.bind(pinnedInstance))
+          }
+        } catch (failoverError) {
+          ctx.logger.warn(`${PLUGIN}: failover watch skipped: ${describeError(failoverError)}`)
+        }
+        return started
       } catch (error) {
         // A member that cannot start on the pinned route must not lose the whole
         // delegation: drop the injection and retry once on the inherited route.
@@ -1162,8 +1202,66 @@ class TeamInjectionAdapter {
     return this
   }
 
+  /**
+   * Watch one live child for lane failures and, when the failover route is
+   * configured, rewrite its subsequent requests to that route exactly once.
+   *
+   * The child Agent is reached through the `agents` registry (injected at the
+   * apply site): `agents.get(childId)` returns the live Agent whose `ctx` can
+   * take scoped listeners. Three tiers of degradation, all silent-safe:
+   *   · no registry / no live agent → no watcher (the child keeps its route);
+   *   · `agent/request-error` with a non-lane code → ignored;
+   *   · the failover rewrite is installed on the first lane failure only —
+   *     `agent/request` then swaps provider/model on later steps, mirroring
+     *     the official installModelSelection semantics minus the notice.
+   * @param childId - the started child's session id.
+   * @param route - the failover route from the config row.
+   * @param label - the delegation label for log lines.
+   */
+  armFailover(childId, route, label, recordRun) {
+    const adapter = this
+    const agents = adapter.ctx?.agents
+    if (agents === undefined || agents === null || typeof agents.get !== 'function') return
+    const agent = agents.get(childId)
+    if (agent === undefined || agent === null || typeof agent !== 'object' || agent.ctx === undefined) return
+    if (adapter.failoverWatched === undefined) adapter.failoverWatched = new WeakSet()
+    if (adapter.failoverWatched.has(agent)) return
+    adapter.failoverWatched.add(agent)
+    const ctx = agent.ctx
+    ctx.on?.('agent/request-error', async (payload, next) => {
+      const code = payload?.failure?.code
+      if (typeof code !== 'string' || !FAILOVER_FAILURE_CODES.has(code)) return next()
+      if (typeof adapter.failoverSwitched !== 'object' || adapter.failoverSwitched === null) adapter.failoverSwitched = new WeakSet()
+      if (adapter.failoverSwitched.has(agent)) return next()
+      adapter.failoverSwitched.add(agent)
+      const routeText = routeKey(route)
+      try {
+        ctx.on?.('agent/request', async (requestPayload, requestNext) => {
+          if (requestPayload?.agent !== agent) return requestNext()
+          const resolved = await requestNext()
+          const { reasoningEffort: _dropped, ...withoutEffort } = resolved
+          return {
+            ...withoutEffort,
+            provider: route.provider,
+            model: route.model
+          }
+        })
+        adapter.ctx.logger?.warn?.(
+          `${PLUGIN}: member ${JSON.stringify(label ?? null)} failed with ${code}; ` +
+            `switching its next requests to the failover route ${routeText}`
+        )
+        recordRun?.({ label, route, outcome: 'failover', reason: code, channel: 'team' })
+      } catch (error) {
+        adapter.ctx.logger?.warn?.(`${PLUGIN}: failover switch failed: ${describeError(error)}`)
+      }
+      return next()
+    })
+  }
+
   /** Remove this generation's hooks, restoring whatever ran before them. */
   dispose(resolveProvider) {
+    this.failoverWatched = undefined
+    this.failoverSwitched = undefined
     const service = this.service
     const current = readHookSlot(service)
     if (current === undefined || current.resolve !== resolveProvider) return
@@ -1369,7 +1467,11 @@ function applyInner(ctx, config = {}) {
     provider: config.provider,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
-    maxTokens: config.maxTokens
+    maxTokens: config.maxTokens,
+    // The runtime failover route, carried as-is (raw accessor or object) so the
+    // hook can read it with valueOf per delegation, same as the other volatile
+    // fields.
+    failoverRoute: config.failoverRoute
   }
   const state = { settings: undefined, settingsText: undefined, checked: new Map() }
   const provider = new RoutePinProvider({ ctx, config: normalized, state })
