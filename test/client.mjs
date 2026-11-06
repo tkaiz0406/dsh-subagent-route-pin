@@ -245,5 +245,42 @@ function makeContext(options = {}) {
   )
 }
 
+// --- failover lane: checkbox arms the route, save serializes the object ---
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  // Arming defaults the lane to the current draft route.
+  face.actions.setFailover('our-free-model', 'deepseek-v4.1-flash-free')
+  check(
+    'failover lane armed with explicit routes',
+    snapshot().draft.failoverProvider === 'our-free-model' && snapshot().draft.failoverModel === 'deepseek-v4.1-flash-free',
+    JSON.stringify(snapshot().draft)
+  )
+  await face.actions.save()
+  const failoverOp = state.mutations.at(-1).ops.find((op) => op.path[0] === 'failoverRoute')
+  check(
+    'save serializes failoverRoute as one object op',
+    failoverOp !== undefined && failoverOp.value.provider === 'our-free-model' && failoverOp.value.model === 'deepseek-v4.1-flash-free',
+    JSON.stringify(failoverOp)
+  )
+  check(
+    'accepted route mirrors the failover lane back',
+    snapshot().saved.failoverProvider === 'our-free-model' && snapshot().saved.failoverModel === 'deepseek-v4.1-flash-free',
+    JSON.stringify(snapshot().saved)
+  )
+  // Disarming clears both selects and the next save omits the op entirely.
+  face.actions.setFailover('', '')
+  await face.actions.save()
+  const lastOps = state.mutations.at(-1).ops
+  check(
+    'disarmed failover omits the route op',
+    lastOps.every((op) => op.path[0] !== 'failoverRoute'),
+    JSON.stringify(lastOps.map((op) => op.path[0]))
+  )
+}
+
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)

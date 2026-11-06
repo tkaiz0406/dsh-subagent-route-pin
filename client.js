@@ -60,6 +60,14 @@ window.__ModuleLoader__.load({
       engineBlocked: '单发子代理引擎 — agency-agents 配了 maxDepth，召唤要等全部跑完',
       engineAbsent: '未安装专家团 — 团队模式注入只作用于 Agent Teams 成员',
       engineUnknown: '读不到专家团配置，按团队模式估计',
+      failoverLabel: '故障切换路由（可选）',
+      failoverHint:
+        '被钉住的子代理在运行中撞上额度耗尽、鉴权失效、适配器消失等车道级故障时，其后续请求会被改写到这条备用路由（仅切换一次）。留空 = 关闭。与「团队模式注入」共用下面两个下拉的选择。',
+      failoverToggle: '启用故障切换',
+      rolesLabel: '按角色路由（roles）',
+      rolesHint:
+        'Agent Teams 成员按其团队角色（实现者/验证者/审查者等，来自团队状态文件）套用对应路由，优先级高于上面的主路由。编辑 ~/.dsh/subagent-route-pin.json 的 roles 字段后下一次团队委派即生效；dsh-role-preset delivery 可一键写入三车道预设。',
+      driftLabel: '当前生效路由',
       hint:
         '需要 API Key 的提供方请到 设置 → 模型 里配置，随后会出现在这里。个别专家单独指定模型：编辑 ~/.dsh/subagent-route-pin.json 的 experts 字段（可选）。'
     }
@@ -93,6 +101,14 @@ window.__ModuleLoader__.load({
       engineBlocked: 'One-shot subagent engine — agency-agents sets maxDepth, so a summon blocks until every expert finishes',
       engineAbsent: 'Agency is not installed — injection only reaches Agent-Teams members',
       engineUnknown: 'Could not read the agency row; assuming team mode',
+      failoverLabel: 'Failover route (optional)',
+      failoverHint:
+        'When a pinned child hits a lane failure mid-flight (quota drained, auth revoked, adapter gone), its next requests are rewritten to this backup route (once). Leave empty to disable. Shares the two dropdowns below with team injection.',
+      failoverToggle: 'Enable failover',
+      rolesLabel: 'Role routes (roles)',
+      rolesHint:
+        'Agent-Teams members are routed by their durable team role (实现者/验证者/审查者 from the team state file); roles outrank the main route above. Edit the roles field of ~/.dsh/subagent-route-pin.json and the next team delegation picks it up; dsh-role-preset delivery writes the three-lane preset in one shot.',
+      driftLabel: 'Effective route',
       hint:
         'Providers that need an API key are configured in Settings → Models and then appear here. Per-expert overrides: edit the experts field of ~/.dsh/subagent-route-pin.json (optional).'
     }
@@ -100,7 +116,7 @@ window.__ModuleLoader__.load({
     const inject = ['slots', 'locale', 'remote', 'remote.session', 'configForms']
 
     function emptyRoute() {
-      return { provider: '', model: '', reasoningEffort: '', teamInjection: true }
+      return { provider: '', model: '', reasoningEffort: '', teamInjection: true, failoverProvider: '', failoverModel: '' }
     }
 
     function sameRoute(left, right) {
@@ -108,7 +124,9 @@ window.__ModuleLoader__.load({
         left.provider === right.provider &&
         left.model === right.model &&
         left.reasoningEffort === right.reasoningEffort &&
-        left.teamInjection === right.teamInjection
+        left.teamInjection === right.teamInjection &&
+        left.failoverProvider === right.failoverProvider &&
+        left.failoverModel === right.failoverModel
       )
     }
 
@@ -135,7 +153,15 @@ window.__ModuleLoader__.load({
         provider: typeof value.provider === 'string' ? value.provider : '',
         model: typeof value.model === 'string' ? value.model : '',
         reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : '',
-        teamInjection: value.teamInjection !== false
+        teamInjection: value.teamInjection !== false,
+        failoverProvider:
+          value.failoverRoute !== null && typeof value.failoverRoute === 'object' && typeof value.failoverRoute.provider === 'string'
+            ? value.failoverRoute.provider
+            : '',
+        failoverModel:
+          value.failoverRoute !== null && typeof value.failoverRoute === 'object' && typeof value.failoverRoute.model === 'string'
+            ? value.failoverRoute.model
+            : ''
       }
     }
 
@@ -321,6 +347,17 @@ window.__ModuleLoader__.load({
             landed: false
           })
         },
+        setFailover(provider, model) {
+          const state = store.get()
+          publish({
+            draft: { ...state.draft, failoverProvider: provider, failoverModel: model },
+            touched: true,
+            conflict: false,
+            failed: false,
+            landed: false,
+            precheck: null
+          })
+        },
         setTeamInjection(teamInjection) {
           const state = store.get()
           publish({
@@ -371,12 +408,23 @@ window.__ModuleLoader__.load({
           saving = true
           publish({ saving: true, failed: false, conflict: false, landed: false })
           try {
+            const failoverOps =
+              draft.failoverProvider !== '' && draft.failoverModel !== ''
+                ? [
+                    {
+                      op: 'set',
+                      path: ['failoverRoute'],
+                      value: { provider: draft.failoverProvider, model: draft.failoverModel }
+                    }
+                  ]
+                : []
             await scope.mutate(
               [
                 { op: 'set', path: ['provider'], value: draft.provider },
                 { op: 'set', path: ['model'], value: draft.model },
                 { op: 'set', path: ['reasoningEffort'], value: draft.reasoningEffort },
-                { op: 'set', path: ['teamInjection'], value: draft.teamInjection }
+                { op: 'set', path: ['teamInjection'], value: draft.teamInjection },
+                ...failoverOps
               ],
               snap.revision
             )
@@ -576,6 +624,71 @@ window.__ModuleLoader__.load({
           h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, label(t, 'teamLabel'))
         ),
         h('p', { style: HINT_STYLE }, label(t, 'teamHint')),
+        h(
+          'label',
+          { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px' } },
+          h('input', {
+            type: 'checkbox',
+            checked: state.draft.failoverProvider !== '' && state.draft.failoverModel !== '',
+            disabled: !editable,
+            onChange: (event) => {
+              if (event.currentTarget.checked) {
+                // Default the failover lane to the main route; the user can
+                // then re-point either dropdown without touching the checkbox.
+                face.actions.setFailover(state.draft.provider, state.draft.model)
+              } else {
+                face.actions.setFailover('', '')
+              }
+            }
+          }),
+          h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, label(t, 'failoverToggle'))
+        ),
+        state.draft.failoverProvider !== '' || state.draft.failoverModel !== ''
+          ? h('div', { style: { display: 'grid', gap: '8px' } },
+              fieldRow(
+                t,
+                `${label(t, 'failoverLabel')} · ${label(t, 'provider')}`,
+                h(
+                  'select',
+                  {
+                    style: SELECT_STYLE,
+                    value: state.draft.failoverProvider,
+                    disabled: !editable,
+                    onChange: (event) => face.actions.setFailover(event.currentTarget.value, state.draft.failoverModel)
+                  },
+                  h('option', { value: '' }, '—'),
+                  providers.map((provider) => h('option', { key: provider.id, value: provider.id }, provider.name))
+                )
+              ),
+              fieldRow(
+                t,
+                `${label(t, 'failoverLabel')} · ${label(t, 'model')}`,
+                h(
+                  'select',
+                  {
+                    style: SELECT_STYLE,
+                    value: state.draft.failoverModel,
+                    disabled: !editable,
+                    onChange: (event) => face.actions.setFailover(state.draft.failoverProvider, event.currentTarget.value)
+                  },
+                  h('option', { value: '' }, '—'),
+                  rows.map((row) =>
+                    h(
+                      'option',
+                      { key: `fo-${row.provider}/${row.model}`, value: row.model },
+                      row.modelName
+                    )
+                  )
+                )
+              ),
+              h('p', { style: HINT_STYLE }, label(t, 'failoverHint'))
+            )
+          : null,
+        h(
+          'p',
+          { style: HINT_STYLE },
+          `${label(t, 'rolesLabel')}: ${label(t, 'rolesHint')}`
+        ),
         h(
           'p',
           { style: HINT_STYLE },
