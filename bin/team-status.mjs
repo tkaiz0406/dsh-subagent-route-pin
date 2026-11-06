@@ -76,6 +76,49 @@ function expandScans(roots) {
 
 /* ---------------------------------------------------------------- read */
 
+/* 委派事件流：一行一个 JSON 对象，坏行跳过（与 index.js 的 readEvents 同契约）。 */
+function readEvents(dir) {
+  const file = path.join(dir, 'delegation-hub.events.jsonl')
+  let text = ''
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return []
+  }
+  const events = []
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    try {
+      const parsed = JSON.parse(line)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) events.push(parsed)
+    } catch {
+      /* 跳过损坏行 */
+    }
+  }
+  return events
+}
+
+function renderEvents(events) {
+  if (events.length === 0) return ''
+  const FAILURES = new Set(['failed', 'failover'])
+  const rows = events
+    .slice(-40)
+    .reverse()
+    .map((event) => {
+      const lane = FAILURES.has(event.outcome) ? 'ev-bad' : 'ev-ok'
+      const route = event.route ? `${event.route.provider}/${event.route.model}` : '-'
+      const source = event.source ?? ''
+      const reason = event.reason ? ` · ${event.reason}` : ''
+      return `<tr class="${lane}"><td>${escapeHtml(String(event.at ?? ''))}</td><td><code>${escapeHtml(String(event.label ?? ''))}</code></td><td>${escapeHtml(String(event.channel ?? '-'))}</td><td>${escapeHtml(String(event.outcome ?? ''))}</td><td><code>${escapeHtml(route)}</code></td><td>${escapeHtml(source)}${escapeHtml(reason)}</td></tr>`
+    })
+    .join('')
+  return `<section>
+  <header><h2>委派事件流</h2><span class="b b-pending">最近 ${Math.min(events.length, 40)} / 共 ${events.length}</span></header>
+  <table><thead><tr><th>时间</th><th>label</th><th>通道</th><th>结果</th><th>路由</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table>
+  <p class="dim">数据源 delegation-hub.events.jsonl（追加式事件流，坏行自动跳过）。</p>
+</section>`
+}
+
 function readTeams(dir) {
   const root = path.join(dir, '.agent-teams')
   let entries
@@ -181,7 +224,7 @@ function renderTeam(team) {
 </section>`
 }
 
-const PAGE = (teams, dirs) => `<!doctype html>
+const PAGE = (teams, dirs, events = []) => `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="refresh" content="2">
 <title>Agent Teams 状态</title>
 <style>
@@ -210,19 +253,29 @@ const PAGE = (teams, dirs) => `<!doctype html>
   th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #1d2230;vertical-align:top}
   th{color:#8b93a7;font-weight:500;font-size:12px}
   code{background:#1d2230;border-radius:4px;padding:0 4px;font-size:12px}
+  tr.ev-bad td{color:#ff8080}
+  tr.ev-ok td{color:#c8cede}
 </style></head>
 <body>
 <h1>Agent Teams 状态</h1>
 <p class="dim">每 2 秒自动刷新 · ${escapeHtml(new Date().toLocaleString('zh-CN'))} · 扫描目录 ${dirs.map((d) => `<code>${escapeHtml(d)}</code>`).join(' ')}</p>
 ${teams.length ? teams.map(renderTeam).join('\n') : '<section><p class="dim">没有找到团队。检查启动时的工作目录，或加 --dir 指向你的项目根目录。</p></section>'}
+${renderEvents(events)}
 </body></html>`
 
 /* ---------------------------------------------------------------- main */
 
 function collect(dirs) {
   const teams = []
-  for (const dir of dirs) teams.push(...readTeams(dir))
-  return teams.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+  const events = []
+  for (const dir of dirs) {
+    teams.push(...readTeams(dir))
+    events.push(...readEvents(dir))
+  }
+  return {
+    teams: teams.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)),
+    events
+  }
 }
 
 async function serve(args) {
@@ -232,9 +285,9 @@ async function serve(args) {
       res.end('ok')
       return
     }
-    const teams = collect(args.dirs)
+    const { teams, events } = collect(args.dirs)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(PAGE(teams, args.dirs))
+    res.end(PAGE(teams, args.dirs, events))
   })
   const port = await new Promise((resolve, reject) => {
     server.once('error', reject)
