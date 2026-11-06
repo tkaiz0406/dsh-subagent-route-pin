@@ -212,12 +212,12 @@ node test/logs.mjs --log captured-console.txt
 
 | DSH / `@deepseek-ai/dsh-tool-subagent` | 状态 | 说明 |
 | --- | --- | --- |
-| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 当前 `peerDependencies` 写的范围，`0.2.1-rc.2`、`0.2.1-rc.3` 实测 205 项断言全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
+| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 当前 `peerDependencies` 写的范围，`0.2.1-rc.2`、`0.2.1-rc.3` 实测 214 项断言全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
 | `0.2.1-rc.3` | ✅ 已验证 | 桌面端 0.2.1-rc.3 上 readiness 记录显示 `seams: ["startActivation"]`、`teamInjection: installed`，配置行路由生效 |
 | `0.2.0-rc.x` | ❓ 未验证 | 接口面看起来一致（旧版走 `startContinuable`），但没跑过；装了会看到 peer 警告 |
 | `>= 0.4.0` | ⚠️ 未验证 | 超出 peer 范围，DSH 插件管理器会标「异常」并拒绝启动；上游一旦改动 provider 或创建子代理的接缝，日志会先缺，插件按能力标志降级 |
 
-`peerDependencies` 从「钉死单个 `0.2.1-rc.2`」放宽到 `>=0.2.0-rc.1 <0.4.0`：DSH 每次发 rc 都不再让这个插件被判不兼容、也不会因此被插件管理器拦下。范围上限留在 `0.4.0`，是因为 provider 和创建子代理的接缝属于内部契约，跨 minor 需要重新验证——发版前请跑 `npm test`（205 项断言）与 `npm run ready`（真实宿主上的 readiness）。
+`peerDependencies` 从「钉死单个 `0.2.1-rc.2`」放宽到 `>=0.2.0-rc.1 <0.4.0`：DSH 每次发 rc 都不再让这个插件被判不兼容、也不会因此被插件管理器拦下。范围上限留在 `0.4.0`，是因为 provider 和创建子代理的接缝属于内部契约，跨 minor 需要重新验证——发版前请跑 `npm test`（214 项断言）与 `npm run ready`（真实宿主上的 readiness）。
 
 同一个范围还写在 `package.json` 的 `engines.dsh` 里，两处**必须逐字相同**（`npm test` 会比对，改一处不改另一处会红）：
 
@@ -258,12 +258,12 @@ if (capability.teamInjection === 'unavailable') {
 ## 测试
 
 ```bash
-node test/run.mjs        # 205 项断言，不需要 DSH 在跑
+node test/run.mjs        # 214 项断言，不需要 DSH 在跑
 node test/logs.mjs       # 检查真实启动留下的就绪记录
 npm run verify           # 两个一起，且 --strict
 ```
 
-205 项断言：路由优先级、文件热读、strict 校验、团队注入、覆盖团队成员自带路由（默认覆盖 / `overrideMemberRoute: false` 时尊重 / 保留调用方其他字段 / 丢弃旧路由的 effort / 覆盖失败退回调用方原路由）、开关关闭、缺路由不阻断、dispose 还原、重复挂载换路由、能力标志（installed / unavailable / 无任何接缝）、多接缝（只有 `startActivation` / 只有 `startContinuable` / 两条都在时优先前者且只注入一次）、启动失败回退（单发 / 团队 / 关闭开关 / 重试仍失败 / 同路由不重试）、日志契约、就绪记录（正常挂载 / 缺服务 / 版本一致 / 生效路由与来源 / 设置文件 default 被配置行盖住时报警 / 缺路由字段时 WARN 而不是打印 `undefined -> undefined` / 未来时间戳不报健康年龄）、激活探针（成功覆盖陈旧 parked / 版本与 package.json 严格相等 / 拒绝挂载时记 `degraded` 而非 `applied` / 只 import 不 apply 记 `parked` / `apply()` 抛错记 `failed` 且保留原文 / 四个相位都带 `mounted` 与 `invoked` / 冒烟检查读旧 schema 的 `note`/`error` 不丢原因 / 空字符串理由会落到旧字段 / 过旧探针报版本与年龄 / 损坏 JSON 记 `unreadable` 且不冒充「未被 import」/ 非对象记录同样判失败且判定不随 `--strict` 变化 / 未来时间戳不报健康年龄 / 探针缺失判失败而不是「删掉就过」 / 版本不一致判 `MISS` 而不是先给绿灯 / 就绪记录为非对象时判失败且不崩栈、判定与损坏 JSON 一致）、发包元数据（engines.dsh 与 peer 范围一致 / bin 路径无前导 ./ 且文件存在 / 包内 cordis.patch.yml 的 name 指向本包且是可解析的模块路径）。
+214 项断言：路由优先级、文件热读、strict 校验、团队注入、覆盖团队成员自带路由（默认覆盖 / `overrideMemberRoute: false` 时尊重 / 保留调用方其他字段 / 丢弃旧路由的 effort / 覆盖失败退回调用方原路由）、开关关闭、缺路由不阻断、dispose 还原、重复挂载换路由、能力标志（installed / unavailable / 无任何接缝）、多接缝（只有 `startActivation` / 只有 `startContinuable` / 两条都在时优先前者且只注入一次）、启动失败回退（单发 / 团队 / 关闭开关 / 重试仍失败 / 同路由不重试）、日志契约、就绪记录（正常挂载 / 缺服务 / 版本一致 / 生效路由与来源 / 设置文件 default 被配置行盖住时报警 / 缺路由字段时 WARN 而不是打印 `undefined -> undefined` / 未来时间戳不报健康年龄）、激活探针（成功覆盖陈旧 parked / 版本与 package.json 严格相等 / 拒绝挂载时记 `degraded` 而非 `applied` / 只 import 不 apply 记 `parked` / `apply()` 抛错记 `failed` 且保留原文 / 四个相位都带 `mounted` 与 `invoked` / 冒烟检查读旧 schema 的 `note`/`error` 不丢原因 / 空字符串理由会落到旧字段 / 过旧探针报版本与年龄 / 损坏 JSON 记 `unreadable` 且不冒充「未被 import」/ 非对象记录同样判失败且判定不随 `--strict` 变化 / 未来时间戳不报健康年龄 / 探针缺失判失败而不是「删掉就过」 / 版本不一致判 `MISS` 而不是先给绿灯 / 就绪记录为非对象时判失败且不崩栈、判定与损坏 JSON 一致）、发包元数据（engines.dsh 与 peer 范围一致 / bin 路径无前导 ./ 且文件存在 / 包内 cordis.patch.yml 的 name 指向本包且是可解析的模块路径）。
 
 `test/run.mjs` 证明的是**插件逻辑没坏**；`test/logs.mjs` 证明的是**它在这个 DSH 构建里还挂着**。两件事会分别失败，上游接口变更先体现在后者。
 
@@ -272,7 +272,7 @@ npm run verify           # 两个一起，且 --strict
 升级 DSH 后按这个顺序走，别跳步：
 
 ```bash
-node test/run.mjs                 # 1. 逻辑层：205 项还绿吗
+node test/run.mjs                 # 1. 逻辑层：214 项还绿吗
 # 2. 重启 DSH（只改插件不用，改 DSH 本体必须）
 npm run ready                     # 3. 挂载层：就绪记录还是这次启动写的吗
 ```

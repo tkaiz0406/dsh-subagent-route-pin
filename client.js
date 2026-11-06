@@ -46,6 +46,8 @@ window.__ModuleLoader__.load({
       readOnly: '本部署的设置为只读。',
       conflict: '设置已被其他窗口改动，请重新选择。',
       saveFailed: '保存失败，请重试。',
+      precheckProvider: '模型提供方「{provider}」当前不在模型目录里。目录为空或提供方暂时离线时可忽略；再点一次保存强制写入。',
+      precheckModel: '模型「{model}」不在提供方「{provider}」公布的目录里。适配器可能仍接受该 ID；再点一次保存强制写入。',
       catalogLoading: '正在读取模型列表…',
       catalogFailed: '模型列表读取失败。',
       noModels: '当前没有提供方公布模型。',
@@ -77,6 +79,8 @@ window.__ModuleLoader__.load({
       readOnly: 'This deployment stores settings read-only.',
       conflict: 'Settings changed in another window. Choose the model again.',
       saveFailed: 'Save failed. Try again.',
+      precheckProvider: 'Provider "{provider}" is not in the model catalog right now. Ignore this when the catalog is empty or the provider is offline; save once more to force the row.',
+      precheckModel: 'Model "{model}" is not advertised by provider "{provider}". The adapter may still accept the id; save once more to force the row.',
       catalogLoading: 'Loading models…',
       catalogFailed: 'Could not load the model list.',
       noModels: 'No provider currently advertises a model.',
@@ -205,7 +209,8 @@ window.__ModuleLoader__.load({
         saving: false,
         failed: false,
         conflict: false,
-        landed: false
+        landed: false,
+        precheck: null
       })
       let catalogGeneration = 0
       let disposed = false
@@ -298,6 +303,7 @@ window.__ModuleLoader__.load({
             touched: true,
             conflict: false,
             failed: false,
+            precheck: null,
             landed: false
           })
         },
@@ -338,6 +344,30 @@ window.__ModuleLoader__.load({
           if (saving || scope === undefined || snap === undefined || snap.status !== 'ready' || snap.writable !== true) return
           const draft = state.draft
           if (draft.provider === '' || draft.model === '') return
+          // Catalog preflight (P1-④): a model the catalog does not advertise is
+          // the one mistake that used to surface only as a failed delegation.
+          // The catalog is advisory — empty groups or an offline provider are
+          // skipped, and the user can still save (the row may name a model the
+          // adapter accepts dynamically), but the mismatch is shown inline.
+          if (state.catalog.status === 'ready' && state.catalog.groups.length > 0) {
+            const group = state.catalog.groups.find((candidate) => candidate.id === draft.provider)
+            const advertised =
+              group === undefined
+                ? 'provider-missing'
+                : (group.models ?? []).some((candidate) => candidate.id === draft.model)
+                  ? 'ok'
+                  : 'model-missing'
+            if (advertised !== 'ok' && state.precheck === null) {
+              // First save attempt: show the mismatch and stop. Saving again
+              // (state.precheck already set) forces the row through, because the
+              // catalog is advisory and an adapter may accept unlisted ids.
+              publish({
+                precheck: advertised === 'provider-missing' ? { kind: 'provider' } : { kind: 'model' }
+              })
+              return
+            }
+          }
+          publish({ precheck: null })
           saving = true
           publish({ saving: true, failed: false, conflict: false, landed: false })
           try {
@@ -460,6 +490,10 @@ window.__ModuleLoader__.load({
       else if (state.catalog.status === 'error') status = label(t, 'catalogFailed')
       else if (rows.length === 0) status = label(t, 'noModels')
       else if (state.conflict) status = label(t, 'conflict')
+      else if (state.precheck !== null)
+        status = (state.precheck.kind === 'provider' ? label(t, 'precheckProvider') : label(t, 'precheckModel'))
+          .replace('{provider}', state.draft.provider)
+          .replace('{model}', state.draft.model)
       else if (state.failed) status = label(t, 'saveFailed')
       else if (state.saving) status = label(t, 'saving')
       else if (state.landed) status = label(t, 'saved')

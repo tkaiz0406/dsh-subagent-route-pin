@@ -205,5 +205,45 @@ function makeContext(options = {}) {
   check('no longer dirty', snapshot().touched === false, JSON.stringify(snapshot().touched))
 }
 
+// --- catalog preflight: an unadvertised model blocks the first save -------
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  face.actions.setProvider('deepseek-account')
+  face.actions.setModel('not-in-catalog')
+  await face.actions.save()
+  const blocked = state.mutations.length === 0
+  check('unadvertised model blocks the first save', blocked, JSON.stringify(state.mutations))
+  check(
+    'precheck names the model mismatch',
+    snapshot().precheck?.kind === 'model' && snapshot().precheck !== null,
+    JSON.stringify(snapshot().precheck)
+  )
+  // Saving again forces the row through: the catalog is advisory.
+  await face.actions.save()
+  const mutation = state.mutations.at(-1)
+  check(
+    'second save forces the unadvertised model through',
+    mutation !== undefined && mutation.ops.some((op) => op.path[0] === 'model' && op.value === 'not-in-catalog'),
+    JSON.stringify(mutation)
+  )
+  check('precheck cleared after a forced save', snapshot().precheck === null, JSON.stringify(snapshot().precheck))
+  // Switching the provider clears the warning and re-enables normal saves.
+  face.actions.setModel('also-missing')
+  await face.actions.save()
+  check('provider/model change re-arms the precheck', snapshot().precheck?.kind === 'model', JSON.stringify(snapshot().precheck))
+  face.actions.setProvider('our-free-model')
+  check('provider change clears the precheck', snapshot().precheck === null, JSON.stringify(snapshot().precheck))
+  await face.actions.save()
+  check(
+    'advertised provider/model saves without friction',
+    snapshot().saved.provider === 'our-free-model' && snapshot().saved.model === 'deepseek-v4.1-flash-free',
+    JSON.stringify(snapshot().saved)
+  )
+}
+
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)
