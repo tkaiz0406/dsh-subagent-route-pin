@@ -915,10 +915,14 @@ class TeamInjectionAdapter {
       let original
       let fallback = false
       let mayInherit = false
+      // Hoisted for the start-failure path below: `pinned` is declared inside the
+      // first try block, but the retry branch runs in the second one.
+      let pinnedInstance
       try {
         // Per call, not per mount: a remount swaps `slot.resolve` and `slot.options`,
         // and the pin has to follow the newest generation of the plugin.
         const pinned = slot.resolve()
+        pinnedInstance = pinned
         const own = slot.options ?? {}
         const teamInjection = valueOf(own.teamInjection) !== false
         const overrideMemberRoute = valueOf(own.overrideMemberRoute) !== false
@@ -1008,7 +1012,7 @@ class TeamInjectionAdapter {
         // throw away Agent Teams' own member route.
         if (original === undefined) delete request.agentOptions
         else request.agentOptions = original
-        pinned.recordRun({ label: spec.label, route: injected.route, outcome: 'failed', reason: describeError(error), channel: 'team' })
+        pinnedInstance?.recordRun({ label: spec.label, route: injected.route, outcome: 'failed', reason: describeError(error), channel: 'team' })
         ctx.logger.warn(
           `${PLUGIN}: team member ${JSON.stringify(spec.label ?? null)} failed to start on ${routeKey(injected.route)} ` +
             `(${describeError(error)}); retrying on the ${original === undefined ? 'inherited' : 'requested'} route`

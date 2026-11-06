@@ -481,6 +481,12 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   check('failed override retries on the requested route', seen.length === 2 && seen[1]?.provider === 'our-free-model' && seen[1]?.model === 'mimo-v2.6-flash-free', JSON.stringify(seen))
   check('failed override keeps the member alive', result.ok === true)
   check('failed override says requested, not inherited', logs.some(([, message]) => message.includes('retrying on the requested route')))
+  const runRecord = JSON.parse(readFileSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), 'utf8'))
+  check(
+    'failed override records a team-channel run entry',
+    runRecord.outcome === 'failed' && runRecord.channel === 'team' && runRecord.label === 'x' && /429/.test(runRecord.reason),
+    JSON.stringify(runRecord)
+  )
 }
 
 // --- 18. teamInjection: false is an off switch ---------------------------
