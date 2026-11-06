@@ -520,7 +520,13 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     { agents: agentsRegistry }
   )
   harness.setActivation({ childId: 'child-1', ok: true })
-  const spec = { label: 'agent-teams:t1:builder', request: { prompt: 'do', parent: {} } }
+  // A team-shaped parent (cwd + team dir from group 18b) lets the failover
+  // reporter locate the captain mailbox.
+  mkdirSync(join(dir, '.agent-teams', 't1', 'inbox'), { recursive: true })
+  const spec = {
+    label: 'agent-teams:t1:builder',
+    request: { prompt: 'do', parent: { session: { header: { cwd: dir } } } }
+  }
   await harness.service.startActivation(spec)
   check('failover watcher registered on the child context', childListeners.length === 1, String(childListeners.length))
   // A lane failure triggers the switch: the request rewriter is installed.
@@ -548,6 +554,22 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     'failover switch is logged',
     harness.logs.some(([, message]) => message.includes('failover route our-free-model/deepseek-v4.1-flash-free')),
     JSON.stringify(harness.logs.filter(([, message]) => message.includes('failover')).at(-1))
+  )
+  const captainMail = readFileSync(join(dir, '.agent-teams', 't1', 'inbox', 'captain.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  const report = captainMail.at(-1)
+  check(
+    'captain mailbox receives the lane-failure report',
+    report !== undefined &&
+      report.from === 'delegation-hub' &&
+      report.to === 'captain' &&
+      typeof report.id === 'string' &&
+      typeof report.ts === 'number' &&
+      report.content.includes('QUOTA') &&
+      report.content.includes('failoverRoute our-free-model/deepseek-v4.1-flash-free'),
+    JSON.stringify(report)
   )
   // The rewriter swaps provider/model and drops the inherited effort.
   const resolved = await failoverRequestListener(

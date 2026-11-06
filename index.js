@@ -51,6 +51,7 @@ import { appendFileSync, readFileSync, readdirSync, writeFileSync } from 'node:f
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { randomUUID } from 'node:crypto'
 
 export const name = 'delegation-hub'
 
@@ -419,24 +420,37 @@ function normalizeSettings(parsed) {
  *   team state directory.
  * @returns the lower-cased role string, or undefined when unknown.
  */
-function roleForLabel(label, parentAgent) {
-  try {
-    if (typeof label !== 'string' || !label.startsWith('agent-teams:')) return undefined
-    const rest = label.slice('agent-teams:'.length)
-    const sep = rest.indexOf(':')
-    if (sep < 1 || sep === rest.length - 1) return undefined
-    const teamId = rest.slice(0, sep)
-    const memberName = rest.slice(sep + 1)
-    if (teamId === '' || memberName === '') return undefined
-    const cwd =
-      parentAgent && typeof parentAgent === 'object'
-        ? parentAgent.session && typeof parentAgent.session === 'object'
-          ? parentAgent.session.header && typeof parentAgent.session.header === 'object'
-            ? parentAgent.session.header.cwd
-            : undefined
+/**
+ * Parse a team member label into its identity: `agent-teams:<teamId>:<member>`
+ * plus the captain's workspace cwd (from the delegating parent's session
+ * header). Returns undefined for anything that is not a well-formed team
+ * label with a resolvable cwd.
+ */
+function teamRefFromLabel(label, parentAgent) {
+  if (typeof label !== 'string' || !label.startsWith('agent-teams:')) return undefined
+  const rest = label.slice('agent-teams:'.length)
+  const sep = rest.indexOf(':')
+  if (sep < 1 || sep === rest.length - 1) return undefined
+  const teamId = rest.slice(0, sep)
+  const memberName = rest.slice(sep + 1)
+  if (teamId === '' || memberName === '') return undefined
+  const cwd =
+    parentAgent && typeof parentAgent === 'object'
+      ? parentAgent.session && typeof parentAgent.session === 'object'
+        ? parentAgent.session.header && typeof parentAgent.session.header === 'object'
+          ? parentAgent.session.header.cwd
           : undefined
         : undefined
-    if (typeof cwd !== 'string' || cwd === '') return undefined
+      : undefined
+  if (typeof cwd !== 'string' || cwd === '') return undefined
+  return { teamId, memberName, cwd }
+}
+
+function roleForLabel(label, parentAgent) {
+  try {
+    const ref = teamRefFromLabel(label, parentAgent)
+    if (ref === undefined) return undefined
+    const { teamId, memberName, cwd } = ref
     const teamPath = join(cwd, '.agent-teams', teamId, 'team.json')
     const team = JSON.parse(readFileSync(teamPath, 'utf8'))
     if (team === null || typeof team !== 'object' || !Array.isArray(team.members)) return undefined
@@ -454,6 +468,39 @@ function roleForLabel(label, parentAgent) {
   }
 }
 
+
+/**
+ * Deliver one lane-failure report to the team captain's mailbox, using the
+ * exact JSONL contract of @nanmicoder/dsh-agent-teams (isTeamMessage requires
+ * id/from/to/content/ts). Written read-merge-rewrite like its appendMailbox,
+ * so writes from both sides interleave without dropping lines. Any failure —
+ * missing cwd, unreadable directory, read-only home — degrades to a skipped
+ * report; the failover itself has already happened and is recorded elsewhere.
+ */
+function reportToCaptain(ref, text) {
+  try {
+    const inboxDir = join(ref.cwd, '.agent-teams', ref.teamId, 'inbox')
+    const file = join(inboxDir, 'captain.jsonl')
+    let existing = ''
+    try {
+      existing = readFileSync(file, 'utf8')
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+    const separator = existing !== '' && !existing.endsWith('\n') ? '\n' : ''
+    const message = {
+      id: randomUUID(),
+      from: 'delegation-hub',
+      to: 'captain',
+      content: text,
+      ts: Date.now()
+    }
+    writeFileSync(file, `${existing}${separator}${JSON.stringify(message)}
+`, 'utf8')
+  } catch {
+    /* a report must never break the delegation */
+  }
+}
 
 /**
  * The route-pinning provider. Everything is resolved lazily: the base provider
@@ -1116,7 +1163,7 @@ class TeamInjectionAdapter {
             typeof started === 'object' &&
             typeof started.childId === 'string'
           ) {
-            slot.adapter.armFailover(started.childId, { provider: failover.provider, model: failover.model }, spec.label, pinnedInstance?.recordRun.bind(pinnedInstance))
+            slot.adapter.armFailover(started.childId, { provider: failover.provider, model: failover.model }, spec.label, pinnedInstance?.recordRun.bind(pinnedInstance), request.parent)
           }
         } catch (failoverError) {
           ctx.logger.warn(`${PLUGIN}: failover watch skipped: ${describeError(failoverError)}`)
@@ -1233,7 +1280,7 @@ class TeamInjectionAdapter {
    * @param route - the failover route from the config row.
    * @param label - the delegation label for log lines.
    */
-  armFailover(childId, route, label, recordRun) {
+  armFailover(childId, route, label, recordRun, parentAgent) {
     const adapter = this
     const agents = adapter.ctx?.agents
     if (agents === undefined || agents === null || typeof agents.get !== 'function') return
@@ -1266,6 +1313,15 @@ class TeamInjectionAdapter {
             `switching its next requests to the failover route ${routeText}`
         )
         recordRun?.({ label, route, outcome: 'failover', reason: code, channel: 'team' })
+        const ref = teamRefFromLabel(label, parentAgent)
+        if (ref !== undefined) {
+          reportToCaptain(
+            ref,
+            `成员 ${ref.memberName} 的模型路由在运行中触发故障切换：${code}（车道级故障）。` +
+              `后续请求已改写到 failoverRoute ${routeText}（仅此一次）。` +
+              `详情见 ~/.dsh/delegation-hub.events.jsonl。`
+          )
+        }
       } catch (error) {
         adapter.ctx.logger?.warn?.(`${PLUGIN}: failover switch failed: ${describeError(error)}`)
       }
