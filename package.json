@@ -19,7 +19,8 @@
     "LICENSE"
   ],
   "bin": {
-    "dsh-team-status": "bin/team-status.mjs"
+    "dsh-team-status": "bin/team-status.mjs",
+    "dsh-role-preset": "bin/role-preset.mjs"
   },
   "keywords": [
     "dsh",

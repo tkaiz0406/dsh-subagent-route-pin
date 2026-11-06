@@ -361,7 +361,12 @@ function normalizeSettings(parsed) {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('the settings root must be a JSON object')
   }
-  const settings = { default: normalizeRoute(parsed.default, 'default'), experts: new Map(), match: 'exact' }
+  const settings = {
+    default: normalizeRoute(parsed.default, 'default'),
+    experts: new Map(),
+    roles: new Map(),
+    match: 'exact'
+  }
   if (parsed.match !== undefined) {
     if (parsed.match !== 'exact' && parsed.match !== 'contains') {
       throw new Error('match must be "exact" or "contains"')
@@ -377,8 +382,67 @@ function normalizeSettings(parsed) {
       if (route !== undefined) settings.experts.set(key.trim().toLowerCase(), route)
     }
   }
+  if (parsed.roles !== undefined && parsed.roles !== null) {
+    if (typeof parsed.roles !== 'object' || Array.isArray(parsed.roles)) {
+      throw new Error('roles must be an object keyed by member role')
+    }
+    for (const [key, value] of Object.entries(parsed.roles)) {
+      const route = normalizeRoute(value, `roles[${JSON.stringify(key)}]`)
+      if (route !== undefined) settings.roles.set(key.trim().toLowerCase(), route)
+    }
+  }
   return settings
 }
+
+/**
+ * Resolve the Agent-Teams role for a delegated member from its label.
+ *
+ * Team labels look like `agent-teams:<teamId>:<memberName>` ( MEMBER_LABEL_PREFIX
+ * in @nanmicoder/dsh-agent-teams ). The member's role lives in the durable team
+ * state file `<captain cwd>/.agent-teams/<teamId>/team.json` under
+ * `members[].role`. Every failure — no team label, unreadable state, unknown
+ * member, odd shapes — degrades to `undefined`, because a role is an optional
+ * routing refinement and must never break a delegation.
+ * @param label - the delegation label carried on the seam spec.
+ * @param parentAgent - the delegating parent agent; its session cwd locates the
+ *   team state directory.
+ * @returns the lower-cased role string, or undefined when unknown.
+ */
+function roleForLabel(label, parentAgent) {
+  try {
+    if (typeof label !== 'string' || !label.startsWith('agent-teams:')) return undefined
+    const rest = label.slice('agent-teams:'.length)
+    const sep = rest.indexOf(':')
+    if (sep < 1 || sep === rest.length - 1) return undefined
+    const teamId = rest.slice(0, sep)
+    const memberName = rest.slice(sep + 1)
+    if (teamId === '' || memberName === '') return undefined
+    const cwd =
+      parentAgent && typeof parentAgent === 'object'
+        ? parentAgent.session && typeof parentAgent.session === 'object'
+          ? parentAgent.session.header && typeof parentAgent.session.header === 'object'
+            ? parentAgent.session.header.cwd
+            : undefined
+          : undefined
+        : undefined
+    if (typeof cwd !== 'string' || cwd === '') return undefined
+    const teamPath = join(cwd, '.agent-teams', teamId, 'team.json')
+    const team = JSON.parse(readFileSync(teamPath, 'utf8'))
+    if (team === null || typeof team !== 'object' || !Array.isArray(team.members)) return undefined
+    const member = team.members.find(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === 'object' &&
+        typeof candidate.name === 'string' &&
+        candidate.name === memberName
+    )
+    const role = member === undefined ? undefined : member.role
+    return typeof role === 'string' && role.trim() !== '' ? role.trim().toLowerCase() : undefined
+  } catch {
+    return undefined
+  }
+}
+
 
 /**
  * The route-pinning provider. Everything is resolved lazily: the base provider
@@ -503,10 +567,12 @@ class RoutePinProvider {
   }
 
   /**
-   * Resolve the route for one child. Per-expert overrides win, then the row the
-   * Settings page writes, then a legacy `default` in the settings file.
+   * Resolve the route for one child. Per-expert overrides win, then the
+   * member's Agent-Teams role (label `agent-teams:<team>:<member>` + the team
+   * state file), then the row the Settings page writes, then a legacy
+   * `default` in the settings file.
    */
-  resolve(label, settings, configured) {
+  resolve(label, settings, configured, role) {
     if (settings !== undefined) {
       const key = typeof label === 'string' ? label.trim().toLowerCase() : ''
       if (key !== '') {
@@ -517,6 +583,10 @@ class RoutePinProvider {
             if (key.includes(candidate)) return { route, source: `experts[${JSON.stringify(candidate)}] (contains)` }
           }
         }
+      }
+      if (typeof role === 'string' && role !== '') {
+        const roleRoute = settings.roles.get(role)
+        if (roleRoute !== undefined) return { route: roleRoute, source: `roles[${JSON.stringify(role)}]` }
       }
     }
     if (configured !== undefined) return { route: configured, source: 'config row' }
@@ -946,7 +1016,8 @@ class TeamInjectionAdapter {
           let picked
           if (mayOverride) {
             try {
-              const resolved = pinned.resolve(spec.label, pinned.readSettings(), configured)
+              const role = roleForLabel(spec.label, request.parent)
+              const resolved = pinned.resolve(spec.label, pinned.readSettings(), configured, role)
               const problem = await pinned.checkRoute(resolved.route)
               if (problem === undefined) {
                 picked = resolved

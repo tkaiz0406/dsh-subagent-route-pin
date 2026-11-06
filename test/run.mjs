@@ -497,6 +497,119 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   check('teamInjection false leaves the member on the parent route', spec.request.agentOptions === undefined)
 }
 
+// --- 18b. role-based routes from the Agent-Teams state file --------------
+{
+  // A durable team state like the real plugin writes: members carry `role`.
+  const teamDir = join(dir, '.agent-teams', 'team-r1')
+  mkdirSync(teamDir, { recursive: true })
+  writeFileSync(
+    join(teamDir, 'team.json'),
+    JSON.stringify({
+      name: 'r1',
+      id: 'team-r1',
+      members: [
+        { name: 'builder', role: '实现者' },
+        { name: 'reviewer', role: '审查者' }
+      ]
+    }),
+    'utf8'
+  )
+  // The settings file maps roles to routes; role matching is exact and
+  // lower-cased, mirroring the experts map.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      roles: {
+        '审查者': { provider: 'deepseek-account', model: 'deepseek-pro' },
+        '实现者': { provider: 'deepseek-account', model: 'deepseek-flash' }
+      }
+    }),
+    'utf8'
+  )
+  const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const parent = { session: { header: { cwd: dir } } }
+  const reviewerSpec = {
+    label: 'agent-teams:team-r1:reviewer',
+    request: { prompt: 'do', parent, agentOptions: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }
+  }
+  await harness.service.startActivation(reviewerSpec)
+  check(
+    'role route overrides the member default (reviewer -> deepseek-pro)',
+    reviewerSpec.request.agentOptions.provider === 'deepseek-account' && reviewerSpec.request.agentOptions.model === 'deepseek-pro',
+    JSON.stringify(reviewerSpec.request.agentOptions)
+  )
+  check(
+    'role source is named in the log',
+    harness.logs.some(([, message]) => message.includes('roles[') && message.includes('审查者')),
+    JSON.stringify(harness.logs.filter(([, message]) => message.includes('roles[')).at(-1))
+  )
+  const builderSpec = {
+    label: 'agent-teams:team-r1:builder',
+    request: { prompt: 'do', parent, agentOptions: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }
+  }
+  await harness.service.startActivation(builderSpec)
+  check(
+    'second role maps to its own route (builder stays on the row model)',
+    builderSpec.request.agentOptions.provider === 'deepseek-account' && builderSpec.request.agentOptions.model === 'deepseek-flash',
+    JSON.stringify(builderSpec.request.agentOptions)
+  )
+  // A member the team file does not know falls through to the config row.
+  const strangerSpec = {
+    label: 'agent-teams:team-r1:stranger',
+    request: { prompt: 'do', parent, agentOptions: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }
+  }
+  await harness.service.startActivation(strangerSpec)
+  check(
+    'unknown member falls back to the config row',
+    strangerSpec.request.agentOptions.provider === 'deepseek-account' && strangerSpec.request.agentOptions.model === 'deepseek-flash',
+    JSON.stringify(strangerSpec.request.agentOptions)
+  )
+  // Experts still outrank roles: name the member like an expert entry.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      experts: { 'agent-teams:team-r1:reviewer': { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } },
+      roles: { '审查者': { provider: 'deepseek-account', model: 'deepseek-pro' } }
+    }),
+    'utf8'
+  )
+  const expertSpec = {
+    label: 'agent-teams:team-r1:reviewer',
+    request: { prompt: 'do', parent, agentOptions: { provider: 'deepseek-account', model: 'deepseek-flash' } }
+  }
+  await harness.service.startActivation(expertSpec)
+  check(
+    'experts outrank roles',
+    expertSpec.request.agentOptions.model === 'deepseek-v4.1-flash-free',
+    JSON.stringify(expertSpec.request.agentOptions)
+  )
+  // Missing cwd / broken state file / non-team label must not break delegation.
+  const noParentSpec = {
+    label: 'agent-teams:team-r1:reviewer',
+    request: { prompt: 'do', parent: {} }
+  }
+  let threw
+  try {
+    await harness.service.startActivation(noParentSpec)
+  } catch (error) {
+    threw = error
+  }
+  check('missing cwd degrades to the config row without throwing', threw === undefined, threw && threw.message)
+  check(
+    'missing cwd still resolves a route (experts entry wins without a role)',
+    noParentSpec.request.agentOptions.provider === 'our-free-model' && noParentSpec.request.agentOptions.model === 'deepseek-v4.1-flash-free',
+    JSON.stringify(noParentSpec.request.agentOptions)
+  )
+  // A non-team label never consults roles even when they are configured.
+  const plainSpec = { label: 'x', request: { prompt: 'do', parent: { session: { header: { cwd: dir } } } } }
+  await harness.service.startActivation(plainSpec)
+  check(
+    'non-team label ignores roles',
+    plainSpec.request.agentOptions.provider === 'deepseek-account' && plainSpec.request.agentOptions.model === 'deepseek-flash',
+    JSON.stringify(plainSpec.request.agentOptions)
+  )
+}
+
 // --- 19. a missing route never breaks member creation --------------------
 {
   const harness = makeHarness({})
