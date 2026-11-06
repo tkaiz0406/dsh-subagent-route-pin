@@ -319,5 +319,20 @@ function makeContext(options = {}) {
   )
 }
 
+// --- empty catalog: saving with empty selects explains itself -------------
+{
+  const { ctx, state } = makeContext({ value: { provider: '', model: '', reasoningEffort: '' } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  await face.actions.save()
+  check(
+    'empty-select save surfaces needCatalog instead of dying silently',
+    snapshot().needCatalog === true && state.mutations.length === 0,
+    JSON.stringify({ needCatalog: snapshot().needCatalog, mutations: state.mutations.length })
+  )
+}
+
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)

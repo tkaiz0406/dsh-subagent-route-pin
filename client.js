@@ -46,6 +46,7 @@ window.__ModuleLoader__.load({
       readOnly: '本部署的设置为只读。',
       conflict: '设置已被其他窗口改动，请重新选择。',
       saveFailed: '保存失败，请重试。',
+      needCatalog: '模型目录为空：请确认已登录模型账号，或先在对话里发一条消息让模型通道就绪，然后再选择提供商与模型。',
       precheckProvider: '模型提供方「{provider}」当前不在模型目录里。目录为空或提供方暂时离线时可忽略；再点一次保存强制写入。',
       precheckModel: '模型「{model}」不在提供方「{provider}」公布的目录里。适配器可能仍接受该 ID；再点一次保存强制写入。',
       catalogLoading: '正在读取模型列表…',
@@ -93,6 +94,7 @@ window.__ModuleLoader__.load({
       readOnly: 'This deployment stores settings read-only.',
       conflict: 'Settings changed in another window. Choose the model again.',
       saveFailed: 'Save failed. Try again.',
+      needCatalog: 'The model catalog is empty: sign in to a model account, or send one message in a conversation to ready the model lane, then pick a provider and model.',
       precheckProvider: 'Provider "{provider}" is not in the model catalog right now. Ignore this when the catalog is empty or the provider is offline; save once more to force the row.',
       precheckModel: 'Model "{model}" is not advertised by provider "{provider}". The adapter may still accept the id; save once more to force the row.',
       catalogLoading: 'Loading models…',
@@ -272,7 +274,8 @@ window.__ModuleLoader__.load({
         failed: false,
         conflict: false,
         landed: false,
-        precheck: null
+        precheck: null,
+        needCatalog: false
       })
       let catalogGeneration = 0
       let disposed = false
@@ -443,7 +446,12 @@ window.__ModuleLoader__.load({
           const snap = snapshot()
           if (saving || scope === undefined || snap === undefined || snap.status !== 'ready' || snap.writable !== true) return
           const draft = state.draft
-          if (draft.provider === '' || draft.model === '') return
+          if (draft.provider === '' || draft.model === '') {
+            // Empty selects used to silently swallow the click: the user saw a
+            // dead button. Surface the reason instead.
+            publish({ needCatalog: true, failed: false, conflict: false, landed: false })
+            return
+          }
           // Catalog preflight (P1-④): a model the catalog does not advertise is
           // the one mistake that used to surface only as a failed delegation.
           // The catalog is advisory — empty groups or an offline provider are
@@ -469,7 +477,7 @@ window.__ModuleLoader__.load({
           }
           publish({ precheck: null })
           saving = true
-          publish({ saving: true, failed: false, conflict: false, landed: false })
+          publish({ saving: true, failed: false, conflict: false, landed: false, needCatalog: false })
           try {
             const failoverOps =
               draft.failoverProvider !== '' && draft.failoverModel !== ''
@@ -624,6 +632,7 @@ window.__ModuleLoader__.load({
         status = (state.precheck.kind === 'provider' ? label(t, 'precheckProvider') : label(t, 'precheckModel'))
           .replace('{provider}', state.draft.provider)
           .replace('{model}', state.draft.model)
+      else if (state.needCatalog) status = label(t, 'needCatalog')
       else if (state.failed) status = label(t, 'saveFailed')
       else if (state.saving) status = label(t, 'saving')
       else if (state.landed) status = label(t, 'saved')
