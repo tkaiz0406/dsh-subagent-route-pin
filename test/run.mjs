@@ -589,6 +589,60 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   )
 }
 
+// --- 18b4. step lane with expert+skills prepends a directive --------------
+{
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      steps: {
+        research: {
+          provider: 'our-free-model',
+          model: 'deepseek-v4.1-flash-free',
+          expert: '代码审查工程师',
+          skills: ['aik_auto_memory_use', 'leanrea-win']
+        }
+      }
+    }),
+    'utf8'
+  )
+  const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const spec = {
+    label: 'goal#research',
+    prompt: [{ type: 'text', text: '分析这个仓库' }],
+    parent: {}
+  }
+  await harness.provider.start(spec)
+  const forwardedPrompt = harness.calls.at(-1).prompt
+  const firstText = forwardedPrompt.find((block) => block.type === 'text')
+  check(
+    'step directive prepends expert and skills to the child prompt',
+    typeof firstText?.text === 'string' &&
+      firstText.text.startsWith('[步骤 research]') &&
+      firstText.text.includes('代码审查工程师') &&
+      firstText.text.includes('aik_auto_memory_use') &&
+      firstText.text.includes('分析这个仓库'),
+    JSON.stringify(firstText)
+  )
+  // A step without expert/skills must leave the prompt untouched.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({ steps: { plain: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } } }),
+    'utf8'
+  )
+  const plainSpec = {
+    label: 'goal#plain',
+    prompt: [{ type: 'text', text: '原样任务' }],
+    parent: {}
+  }
+  await harness.provider.start(plainSpec)
+  const plainText = harness.calls.at(-1).prompt.find((block) => block.type === 'text')
+  check(
+    'step lane without expert/skills leaves the prompt untouched',
+    plainText.text === '原样任务',
+    JSON.stringify(plainText)
+  )
+}
+
 // --- 18c. runtime failover watches the live child and swaps once ----------
 {
   const watched = []

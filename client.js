@@ -63,7 +63,9 @@ window.__ModuleLoader__.load({
       engineUnknown: '读不到专家团配置，按团队模式估计',
       stepsLabel: '步骤路由（每步一个模型）',
       stepsAdd: '添加步骤',
-      stepsNamePlaceholder: '步骤名（如 research）',
+      stepsExpertPlaceholder: '专家（可选，如 代码审查工程师）',
+      stepsSkillsPlaceholder: '技能，逗号分隔（可选）',
+      stepsNamePlaceholder: '步骤名，中英文均可（如 research / 调研）',
       stepsRemove: '移除',
       stepsHint:
         '像天枢的模型分工：给每个步骤配一个模型，然后把目标拆成多个串行子委派，委派时在 label 末尾加 #步骤名（如 调研报告#research），该步即走对应路由。优先级：逐专家 > 团队角色 > 步骤 > 主路由。',
@@ -111,6 +113,8 @@ window.__ModuleLoader__.load({
       engineUnknown: 'Could not read the agency row; assuming team mode',
       stepsLabel: 'Step routes (one model per step)',
       stepsAdd: 'Add step',
+      stepsExpertPlaceholder: 'expert (optional)',
+      stepsSkillsPlaceholder: 'skills, comma-separated (optional)',
       stepsNamePlaceholder: 'step name (e.g. research)',
       stepsRemove: 'Remove',
       stepsHint:
@@ -204,7 +208,9 @@ window.__ModuleLoader__.load({
           return Object.entries(raw).map(([name, route]) => ({
             name,
             provider: route && typeof route.provider === 'string' ? route.provider : '',
-            model: route && typeof route.model === 'string' ? route.model : ''
+            model: route && typeof route.model === 'string' ? route.model : '',
+            expert: route && typeof route.expert === 'string' ? route.expert : '',
+            skills: route && Array.isArray(route.skills) ? route.skills.join(', ') : ''
           }))
         })()
       }
@@ -396,7 +402,7 @@ window.__ModuleLoader__.load({
         addStep() {
           const state = store.get()
           publish({
-            draft: { ...state.draft, steps: [...state.draft.steps, { name: '', provider: '', model: '' }] },
+            draft: { ...state.draft, steps: [...state.draft.steps, { name: '', provider: '', model: '', expert: '', skills: '' }] },
             touched: true,
             conflict: false,
             failed: false,
@@ -499,7 +505,12 @@ window.__ModuleLoader__.load({
             const stepObject = {}
             for (const row of draft.steps ?? []) {
               if (row.name.trim() === '' || row.provider === '' || row.model === '') continue
-              stepObject[row.name.trim()] = { provider: row.provider, model: row.model }
+              const lane = { provider: row.provider, model: row.model }
+              if (typeof row.expert === 'string' && row.expert.trim() !== '') lane.expert = row.expert.trim()
+              if (typeof row.skills === 'string' && row.skills.trim() !== '') {
+                lane.skills = row.skills.split(/[,，]/).map((skill) => skill.trim()).filter((skill) => skill !== '')
+              }
+              stepObject[row.name.trim()] = lane
             }
             const stepOps =
               Object.keys(stepObject).length > 0
@@ -790,12 +801,22 @@ window.__ModuleLoader__.load({
         ...(state.draft.steps ?? []).map((row, index) =>
           h(
             'div',
-            { key: `step-${index}`, style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto', gap: '8px', alignItems: 'center' } },
+            {
+              key: `step-${index}`,
+              style: {
+                display: 'grid',
+                gridTemplateColumns: 'minmax(120px, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) auto',
+                gap: '8px',
+                alignItems: 'center',
+                minWidth: 0
+              }
+            },
             h('input', {
               placeholder: label(t, 'stepsNamePlaceholder'),
               value: row.name,
               disabled: !editable,
-              style: INPUT_STYLE,
+              maxLength: 40,
+              style: { ...INPUT_STYLE, minWidth: 0 },
               onChange: (event) => face.actions.setStep(index, { name: event.currentTarget.value })
             }),
             h(
@@ -822,6 +843,22 @@ window.__ModuleLoader__.load({
                 .filter((candidate) => candidate.provider === row.provider)
                 .map((candidate) => h('option', { key: `${index}-${candidate.provider}/${candidate.model}`, value: candidate.model }, candidate.modelName))
             ),
+            h('input', {
+              placeholder: label(t, 'stepsExpertPlaceholder'),
+              value: row.expert ?? '',
+              disabled: !editable,
+              maxLength: 60,
+              style: { ...INPUT_STYLE, minWidth: 0 },
+              onChange: (event) => face.actions.setStep(index, { expert: event.currentTarget.value })
+            }),
+            h('input', {
+              placeholder: label(t, 'stepsSkillsPlaceholder'),
+              value: row.skills ?? '',
+              disabled: !editable,
+              maxLength: 120,
+              style: { ...INPUT_STYLE, minWidth: 0 },
+              onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
+            }),
             h(
               'button',
               {

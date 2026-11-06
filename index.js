@@ -384,6 +384,7 @@ function normalizeSettings(parsed) {
     experts: new Map(),
     roles: new Map(),
     steps: new Map(),
+    rawSteps: new Map(),
     match: 'exact'
   }
   if (parsed.match !== undefined) {
@@ -416,7 +417,10 @@ function normalizeSettings(parsed) {
     }
     for (const [key, value] of Object.entries(parsed.steps)) {
       const route = normalizeRoute(value, `steps[${JSON.stringify(key)}]`)
-      if (route !== undefined) settings.steps.set(key.trim().toLowerCase(), route)
+      if (route !== undefined) {
+        settings.steps.set(key.trim().toLowerCase(), route)
+        if (value !== null && typeof value === 'object') settings.rawSteps.set(key.trim().toLowerCase(), value)
+      }
     }
   }
   return settings
@@ -516,6 +520,40 @@ function reportToCaptain(ref, text) {
   } catch {
     /* a report must never break the delegation */
   }
+}
+
+/**
+ * Build the step-directive prompt prefix for one delegation, or '' when the
+ * step lane declares no expert and no skills. The directive is advisory
+ * text in the child's first user message: it tells the child which persona
+ * to adopt (agency expert name) and which skills to load (skill names),
+ * without touching the host's persona/skill machinery — those stay owned by
+ * the agent preset system. Anything odd degrades to ''.
+ */
+function stepDirectivePrefix(stepKey, lane) {
+  try {
+    if (lane === null || typeof lane !== 'object') return ''
+    const expert = typeof lane.expert === 'string' ? lane.expert.trim() : ''
+    const skills = Array.isArray(lane.skills)
+      ? lane.skills.filter((skill) => typeof skill === 'string' && skill.trim() !== '')
+      : []
+    if (expert === '' && skills.length === 0) return ''
+    const parts = []
+    if (expert !== '') parts.push(`以「${expert}」专家的身份与专业水准完成本任务`)
+    if (skills.length > 0) parts.push(`优先加载并使用技能：${skills.join('、')}`)
+    return `[步骤 ${stepKey}] ${parts.join('；')}。\n\n`
+  } catch {
+    return ''
+  }
+}
+
+/** Read one step lane (route + expert + skills) from the merged steps map. */
+function stepLaneOf(stepsMap, stepKey) {
+  if (stepsMap === undefined || stepsMap === null) return undefined
+  if (typeof stepsMap.get !== 'function') return undefined
+  const lane = stepsMap.get(stepKey)
+  if (lane === undefined || lane === null || typeof lane !== 'object') return undefined
+  return lane
 }
 
 /**
@@ -658,13 +696,19 @@ class RoutePinProvider {
       }
     }
     let stepsMap = settings !== undefined ? settings.steps : undefined
+    let rawStepsMap = settings !== undefined ? settings.rawSteps : undefined
     if (rowSteps !== undefined && rowSteps !== null && typeof rowSteps === 'object' && !Array.isArray(rowSteps)) {
       const merged = new Map(stepsMap ?? [])
+      const mergedRaw = new Map(rawStepsMap ?? [])
       for (const [key, value] of Object.entries(rowSteps)) {
         const route = normalizeRoute(value, `rowSteps[${JSON.stringify(key)}]`)
-        if (route !== undefined) merged.set(key.trim().toLowerCase(), route)
+        if (route !== undefined) {
+          merged.set(key.trim().toLowerCase(), route)
+          if (value !== null && typeof value === 'object') mergedRaw.set(key.trim().toLowerCase(), value)
+        }
       }
       stepsMap = merged
+      rawStepsMap = mergedRaw
     }
     if (settings !== undefined) {
       const key = typeof label === 'string' ? label.trim().toLowerCase() : ''
@@ -692,7 +736,7 @@ class RoutePinProvider {
       const stepRoute = stepsMap !== undefined ? stepsMap.get(stepKey) : undefined
       if (stepRoute !== undefined) {
         const via = hash >= 0 ? ' (#suffix)' : ''
-        return { route: stepRoute, source: `steps[${JSON.stringify(stepKey)}]${via}` }
+        return { route: stepRoute, source: `steps[${JSON.stringify(stepKey)}]${via}`, stepKey, lane: stepLaneOf(rawStepsMap, stepKey) }
       }
     }
     if (configured !== undefined) return { route: configured, source: 'config row' }
@@ -845,7 +889,7 @@ class RoutePinProvider {
         route = configured
         source = 'config row (fallback)'
       }
-      return { route, source }
+      return { ...picked, route, source }
     } catch (error) {
       // Only routing findings may degrade to "the child inherits the parent
       // model". A TypeError from a bug in this plugin used to take the same
@@ -882,6 +926,16 @@ class RoutePinProvider {
     const agentOptions = { ...(request.agentOptions ?? {}), provider: route.provider, model: route.model }
     if (route.reasoningEffort !== undefined) agentOptions.reasoningEffort = route.reasoningEffort
     if (route.maxTokens !== undefined) agentOptions.maxTokens = route.maxTokens
+    // Step-directive: when this label resolved through a step lane that names
+    // an expert and/or skills, prepend the advisory prefix to the child's
+    // first prompt text block.
+    if (picked.stepKey !== undefined) {
+      const directive = stepDirectivePrefix(picked.stepKey, picked.lane)
+      if (directive !== '' && Array.isArray(request.prompt)) {
+        const first = request.prompt.find((block) => block !== null && typeof block === 'object' && block.type === 'text')
+        if (first !== undefined) first.text = `${directive}${first.text ?? ''}`
+      }
+    }
     ctx.logger.info(
       `${PLUGIN}: label=${JSON.stringify(label ?? null)} -> ${routeKey(route)}` +
         `${route.reasoningEffort === undefined ? '' : ` effort=${route.reasoningEffort}`} (${source})`
@@ -1179,6 +1233,13 @@ class TeamInjectionAdapter {
             if (claimed) original = request.agentOptions
             request.agentOptions = agentOptions
             injected = picked
+            if (picked.stepKey !== undefined && request.prompt !== undefined && Array.isArray(request.prompt)) {
+              const directive = stepDirectivePrefix(picked.stepKey, picked.lane)
+              if (directive !== '') {
+                const first = request.prompt.find((block) => block !== null && typeof block === 'object' && block.type === 'text')
+                if (first !== undefined) first.text = `${directive}${first.text ?? ''}`
+              }
+            }
             pinned.recordRun({ label: spec.label, route: picked.route, outcome: 'pinned', channel: 'team', source: picked.source })
             ctx.logger.info(
               `${PLUGIN}: team member label=${JSON.stringify(spec.label ?? null)} -> ` +
