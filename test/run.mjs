@@ -627,6 +627,20 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     harness.logs.some(([, message]) => message.includes('roles[') && message.includes('审查者')),
     JSON.stringify(harness.logs.filter(([, message]) => message.includes('roles[')).at(-1))
   )
+  // The disk record must carry the same provenance: channel 'team' plus the
+  // source tag, so a last-run file can prove which tier routed the member.
+  rmSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), { force: true })
+  const roleProbeSpec = {
+    label: 'agent-teams:team-r1:reviewer',
+    request: { prompt: 'do', parent, agentOptions: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }
+  }
+  await harness.service.startActivation(roleProbeSpec)
+  const roleRunRecord = JSON.parse(readFileSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), 'utf8'))
+  check(
+    'role route is recorded on disk with its source',
+    roleRunRecord.channel === 'team' && roleRunRecord.source === 'roles["审查者"]' && roleRunRecord.route.model === 'deepseek-pro',
+    JSON.stringify(roleRunRecord)
+  )
   const builderSpec = {
     label: 'agent-teams:team-r1:builder',
     request: { prompt: 'do', parent, agentOptions: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }

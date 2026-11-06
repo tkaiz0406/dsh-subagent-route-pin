@@ -1069,7 +1069,7 @@ class TeamInjectionAdapter {
             if (claimed) original = request.agentOptions
             request.agentOptions = agentOptions
             injected = picked
-            pinned.recordRun({ label: spec.label, route: picked.route, outcome: 'pinned', channel: 'team' })
+            pinned.recordRun({ label: spec.label, route: picked.route, outcome: 'pinned', channel: 'team', source: picked.source })
             ctx.logger.info(
               `${PLUGIN}: team member label=${JSON.stringify(spec.label ?? null)} -> ` +
                 `${routeKey(picked.route)}${picked.route.reasoningEffort === undefined ? '' : ` effort=${picked.route.reasoningEffort}`} (${picked.source})`
