@@ -498,6 +498,63 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   check('teamInjection false leaves the member on the parent route', spec.request.agentOptions === undefined)
 }
 
+// --- 18b2. step-splitter: per-step routes from the settings file ----------
+{
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      steps: {
+        research: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' },
+        code: { provider: 'deepseek-account', model: 'deepseek-pro' }
+      }
+    }),
+    'utf8'
+  )
+  const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const spec = (label) => ({ label, request: { prompt: 'do', parent: {} } })
+  const research = await harness.provider.start(spec('goal#research'))
+  check(
+    'step suffix routes to the step lane (#research -> free lane)',
+    research.request.agentOptions.provider === 'our-free-model' && research.request.agentOptions.model === 'deepseek-v4.1-flash-free',
+    JSON.stringify(research.request.agentOptions)
+  )
+  const code = await harness.provider.start(spec('goal#code'))
+  check(
+    'second step suffix routes to its own lane (#code -> deepseek-pro)',
+    code.request.agentOptions.model === 'deepseek-pro',
+    JSON.stringify(code.request.agentOptions)
+  )
+  // A plain label never hits the steps tier: it stays on the config row.
+  const plain = await harness.provider.start(spec('goal'))
+  check(
+    'plain label ignores steps entirely',
+    plain.request.agentOptions.provider === 'deepseek-account' && plain.request.agentOptions.model === 'deepseek-flash',
+    JSON.stringify(plain.request.agentOptions)
+  )
+  // An unknown step suffix also falls through to the config row.
+  const unknown = await harness.provider.start(spec('goal#unknown-step'))
+  check(
+    'unknown step suffix falls back to the config row',
+    unknown.request.agentOptions.model === 'deepseek-flash',
+    JSON.stringify(unknown.request.agentOptions)
+  )
+  // experts still outrank steps: name the step label like an expert entry.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      experts: { 'goal#research': { provider: 'deepseek-account', model: 'deepseek-pro' } },
+      steps: { research: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }
+    }),
+    'utf8'
+  )
+  const expertStep = await harness.provider.start(spec('goal#research'))
+  check(
+    'experts outrank steps',
+    expertStep.request.agentOptions.model === 'deepseek-pro',
+    JSON.stringify(expertStep.request.agentOptions)
+  )
+}
+
 // --- 18c. runtime failover watches the live child and swaps once ----------
 {
   const watched = []

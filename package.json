@@ -20,7 +20,8 @@
   ],
   "bin": {
     "dsh-team-status": "bin/team-status.mjs",
-    "dsh-role-preset": "bin/role-preset.mjs"
+    "dsh-role-preset": "bin/role-preset.mjs",
+    "dsh-step-preset": "bin/step-preset.mjs"
   },
   "keywords": [
     "dsh",

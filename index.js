@@ -377,6 +377,7 @@ function normalizeSettings(parsed) {
     default: normalizeRoute(parsed.default, 'default'),
     experts: new Map(),
     roles: new Map(),
+    steps: new Map(),
     match: 'exact'
   }
   if (parsed.match !== undefined) {
@@ -401,6 +402,15 @@ function normalizeSettings(parsed) {
     for (const [key, value] of Object.entries(parsed.roles)) {
       const route = normalizeRoute(value, `roles[${JSON.stringify(key)}]`)
       if (route !== undefined) settings.roles.set(key.trim().toLowerCase(), route)
+    }
+  }
+  if (parsed.steps !== undefined && parsed.steps !== null) {
+    if (typeof parsed.steps !== 'object' || Array.isArray(parsed.steps)) {
+      throw new Error('steps must be an object keyed by step name')
+    }
+    for (const [key, value] of Object.entries(parsed.steps)) {
+      const route = normalizeRoute(value, `steps[${JSON.stringify(key)}]`)
+      if (route !== undefined) settings.steps.set(key.trim().toLowerCase(), route)
     }
   }
   return settings
@@ -645,6 +655,19 @@ class RoutePinProvider {
       if (typeof role === 'string' && role !== '') {
         const roleRoute = settings.roles.get(role)
         if (roleRoute !== undefined) return { route: roleRoute, source: `roles[${JSON.stringify(role)}]` }
+      }
+      // Step-splitter tier: a label ending in `#<name>` (or matching a step
+      // key exactly) routes through that step. This is the deterministic
+      // "different model per step": the delegating agent splits one goal into
+      // serial sub-delegations, each labelled with its step name. The plain
+      // label without the suffix never hits this tier, so unmixed delegations
+      // are unaffected.
+      const hash = key.lastIndexOf('#')
+      const stepKey = hash >= 0 && hash < key.length - 1 ? key.slice(hash + 1) : key
+      const stepRoute = settings.steps.get(stepKey)
+      if (stepRoute !== undefined) {
+        const via = hash >= 0 ? ' (#suffix)' : ''
+        return { route: stepRoute, source: `steps[${JSON.stringify(stepKey)}]${via}` }
       }
     }
     if (configured !== undefined) return { route: configured, source: 'config row' }
