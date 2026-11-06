@@ -294,12 +294,13 @@ function makeContext(options = {}) {
   face.actions.addStep()
   face.actions.setStep(1, { name: 'code', provider: 'deepseek-account', model: 'deepseek-pro' })
   await face.actions.save()
-  const stepsOp = state.mutations.at(-1).ops.find((op) => op.path[0] === 'steps')
+  const stepsOp = state.mutations.at(-1).ops.find((op) => op.path[0] === 'stepsJson')
+  const stepsValue = stepsOp === undefined ? undefined : JSON.parse(stepsOp.value)
   check(
     'save serializes the steps map as one object op',
-    stepsOp !== undefined &&
-      stepsOp.value.research.provider === 'our-free-model' &&
-      stepsOp.value.code.model === 'deepseek-pro',
+    stepsValue !== undefined &&
+      stepsValue.research.provider === 'our-free-model' &&
+      stepsValue.code.model === 'deepseek-pro',
     JSON.stringify(stepsOp)
   )
   check(
@@ -314,7 +315,7 @@ function makeContext(options = {}) {
   const lastOps = state.mutations.at(-1).ops
   check(
     'no rows means no steps op',
-    lastOps.every((op) => op.path[0] !== 'steps'),
+    lastOps.every((op) => op.path[0] !== 'stepsJson'),
     JSON.stringify(lastOps.map((op) => op.path[0]))
   )
 }

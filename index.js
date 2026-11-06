@@ -215,7 +215,10 @@ function makeConfig(z) {
         .volatile(),
       // Step-splitter lanes edited on the Settings page (merged with the
       // settings-file steps at resolve time; the row wins per key).
-      steps: z.record(z.string(), z.object({ provider: z.string().min(1), model: z.string().min(1) })).volatile(),
+      // Steps lanes serialized as a JSON string: schemastery 3.18.5 in some
+      // profiles lacks z.record/z.dict, and z.any drops nested objects, so a
+      // plain string is the only shape that survives every version.
+      stepsJson: z.string().volatile(),
       provider: z.string().volatile(),
       model: z.string().volatile(),
       reasoningEffort: z.string().volatile(),
@@ -645,7 +648,15 @@ class RoutePinProvider {
    */
   resolve(label, settings, configured, role, rowSteps) {
     // Merge the two steps sources up front: the Settings-page row wins per key,
-    // the settings file supplies everything the row does not name.
+    // the settings file supplies everything the row does not name. The row may
+    // carry its lanes as a JSON string (the version-proof config shape).
+    if (typeof rowSteps === 'string' && rowSteps.trim() !== '') {
+      try {
+        rowSteps = JSON.parse(rowSteps)
+      } catch {
+        rowSteps = undefined
+      }
+    }
     let stepsMap = settings !== undefined ? settings.steps : undefined
     if (rowSteps !== undefined && rowSteps !== null && typeof rowSteps === 'object' && !Array.isArray(rowSteps)) {
       const merged = new Map(stepsMap ?? [])
@@ -810,7 +821,7 @@ class RoutePinProvider {
     try {
       const settings = this.readSettings()
       const configured = this.configuredRoute()
-      const picked = this.resolve(label, settings, configured, undefined, valueOf(this.options.config.steps))
+      const picked = this.resolve(label, settings, configured, undefined, valueOf(this.options.config.stepsJson))
       let route = picked.route
       let source = picked.source
       const problem = await this.checkRoute(route)
@@ -1130,7 +1141,7 @@ class TeamInjectionAdapter {
           if (mayOverride) {
             try {
               const role = roleForLabel(spec.label, request.parent)
-              const resolved = pinned.resolve(spec.label, pinned.readSettings(), configured, role, valueOf(own.steps))
+              const resolved = pinned.resolve(spec.label, pinned.readSettings(), configured, role, valueOf(own.stepsJson))
               const problem = await pinned.checkRoute(resolved.route)
               if (problem === undefined) {
                 picked = resolved
@@ -1607,9 +1618,9 @@ function applyInner(ctx, config = {}) {
     // hook can read it with valueOf per delegation, same as the other volatile
     // fields.
     failoverRoute: config.failoverRoute,
-    // Step-splitter lanes from the Settings page; merged with the settings-file
-    // steps in readSettings consumers (the row wins per key).
-    steps: config.steps
+    // Step-splitter lanes from the Settings page as a JSON string (version-proof
+    // shape); parsed and merged with the settings-file steps per key.
+    stepsJson: config.stepsJson
   }
   const state = { settings: undefined, settingsText: undefined, checked: new Map() }
   const provider = new RoutePinProvider({ ctx, config: normalized, state })

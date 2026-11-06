@@ -192,14 +192,21 @@ window.__ModuleLoader__.load({
           value.failoverRoute !== null && typeof value.failoverRoute === 'object' && typeof value.failoverRoute.model === 'string'
             ? value.failoverRoute.model
             : '',
-        steps:
-          value.steps !== null && typeof value.steps === 'object' && !Array.isArray(value.steps)
-            ? Object.entries(value.steps).map(([name, route]) => ({
-                name,
-                provider: route && typeof route.provider === 'string' ? route.provider : '',
-                model: route && typeof route.model === 'string' ? route.model : ''
-              }))
-            : []
+        steps: (() => {
+          let raw = value.stepsJson
+          if (typeof raw !== 'string' || raw.trim() === '') return []
+          try {
+            raw = JSON.parse(raw)
+          } catch {
+            return []
+          }
+          if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return []
+          return Object.entries(raw).map(([name, route]) => ({
+            name,
+            provider: route && typeof route.provider === 'string' ? route.provider : '',
+            model: route && typeof route.model === 'string' ? route.model : ''
+          }))
+        })()
       }
     }
 
@@ -496,7 +503,7 @@ window.__ModuleLoader__.load({
             }
             const stepOps =
               Object.keys(stepObject).length > 0
-                ? [{ op: 'set', path: ['steps'], value: stepObject }]
+                ? [{ op: 'set', path: ['stepsJson'], value: JSON.stringify(stepObject) }]
                 : []
             await scope.mutate(
               [

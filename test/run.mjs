@@ -573,7 +573,7 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   const harness = makeHarness({
     provider: 'deepseek-account',
     model: 'deepseek-flash',
-    steps: { research: { provider: 'deepseek-account', model: 'deepseek-pro' } }
+    stepsJson: JSON.stringify({ research: { provider: 'deepseek-account', model: 'deepseek-pro' } })
   })
   const research = await harness.provider.start({ label: 'goal#research', request: { prompt: 'do', parent: {} } })
   check(
