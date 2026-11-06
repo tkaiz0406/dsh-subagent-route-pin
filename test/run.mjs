@@ -555,6 +555,40 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   )
 }
 
+// --- 18b3. config-row steps override settings-file steps per key ---------
+{
+  // settings file: research on the free lane.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      steps: {
+        research: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' },
+        docs: { provider: 'deepseek-account', model: 'deepseek-flash' }
+      }
+    }),
+    'utf8'
+  )
+  // Settings page row: research moved to deepseek-pro (row wins per key);
+  // docs is not named on the row, so the file value survives (union).
+  const harness = makeHarness({
+    provider: 'deepseek-account',
+    model: 'deepseek-flash',
+    steps: { research: { provider: 'deepseek-account', model: 'deepseek-pro' } }
+  })
+  const research = await harness.provider.start({ label: 'goal#research', request: { prompt: 'do', parent: {} } })
+  check(
+    'row steps override the file per key (#research -> deepseek-pro)',
+    research.request.agentOptions.model === 'deepseek-pro',
+    JSON.stringify(research.request.agentOptions)
+  )
+  const docs = await harness.provider.start({ label: 'goal#docs', request: { prompt: 'do', parent: {} } })
+  check(
+    'file steps survive where the row is silent (#docs -> flash)',
+    docs.request.agentOptions.model === 'deepseek-flash',
+    JSON.stringify(docs.request.agentOptions)
+  )
+}
+
 // --- 18c. runtime failover watches the live child and swaps once ----------
 {
   const watched = []

@@ -213,6 +213,9 @@ function makeConfig(z) {
       failoverRoute: z
         .object({ provider: z.string().min(1), model: z.string().min(1) })
         .volatile(),
+      // Step-splitter lanes edited on the Settings page (merged with the
+      // settings-file steps at resolve time; the row wins per key).
+      steps: z.record(z.string(), z.object({ provider: z.string().min(1), model: z.string().min(1) })).volatile(),
       provider: z.string().volatile(),
       model: z.string().volatile(),
       reasoningEffort: z.string().volatile(),
@@ -640,7 +643,18 @@ class RoutePinProvider {
    * state file), then the row the Settings page writes, then a legacy
    * `default` in the settings file.
    */
-  resolve(label, settings, configured, role) {
+  resolve(label, settings, configured, role, rowSteps) {
+    // Merge the two steps sources up front: the Settings-page row wins per key,
+    // the settings file supplies everything the row does not name.
+    let stepsMap = settings !== undefined ? settings.steps : undefined
+    if (rowSteps !== undefined && rowSteps !== null && typeof rowSteps === 'object' && !Array.isArray(rowSteps)) {
+      const merged = new Map(stepsMap ?? [])
+      for (const [key, value] of Object.entries(rowSteps)) {
+        const route = normalizeRoute(value, `rowSteps[${JSON.stringify(key)}]`)
+        if (route !== undefined) merged.set(key.trim().toLowerCase(), route)
+      }
+      stepsMap = merged
+    }
     if (settings !== undefined) {
       const key = typeof label === 'string' ? label.trim().toLowerCase() : ''
       if (key !== '') {
@@ -664,7 +678,7 @@ class RoutePinProvider {
       // are unaffected.
       const hash = key.lastIndexOf('#')
       const stepKey = hash >= 0 && hash < key.length - 1 ? key.slice(hash + 1) : key
-      const stepRoute = settings.steps.get(stepKey)
+      const stepRoute = stepsMap !== undefined ? stepsMap.get(stepKey) : undefined
       if (stepRoute !== undefined) {
         const via = hash >= 0 ? ' (#suffix)' : ''
         return { route: stepRoute, source: `steps[${JSON.stringify(stepKey)}]${via}` }
@@ -796,7 +810,7 @@ class RoutePinProvider {
     try {
       const settings = this.readSettings()
       const configured = this.configuredRoute()
-      const picked = this.resolve(label, settings, configured)
+      const picked = this.resolve(label, settings, configured, undefined, valueOf(this.options.config.steps))
       let route = picked.route
       let source = picked.source
       const problem = await this.checkRoute(route)
@@ -1116,7 +1130,7 @@ class TeamInjectionAdapter {
           if (mayOverride) {
             try {
               const role = roleForLabel(spec.label, request.parent)
-              const resolved = pinned.resolve(spec.label, pinned.readSettings(), configured, role)
+              const resolved = pinned.resolve(spec.label, pinned.readSettings(), configured, role, valueOf(own.steps))
               const problem = await pinned.checkRoute(resolved.route)
               if (problem === undefined) {
                 picked = resolved
@@ -1592,7 +1606,10 @@ function applyInner(ctx, config = {}) {
     // The runtime failover route, carried as-is (raw accessor or object) so the
     // hook can read it with valueOf per delegation, same as the other volatile
     // fields.
-    failoverRoute: config.failoverRoute
+    failoverRoute: config.failoverRoute,
+    // Step-splitter lanes from the Settings page; merged with the settings-file
+    // steps in readSettings consumers (the row wins per key).
+    steps: config.steps
   }
   const state = { settings: undefined, settingsText: undefined, checked: new Map() }
   const provider = new RoutePinProvider({ ctx, config: normalized, state })

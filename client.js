@@ -60,6 +60,12 @@ window.__ModuleLoader__.load({
       engineBlocked: '单发子代理引擎 — agency-agents 配了 maxDepth，召唤要等全部跑完',
       engineAbsent: '未安装专家团 — 团队模式注入只作用于 Agent Teams 成员',
       engineUnknown: '读不到专家团配置，按团队模式估计',
+      stepsLabel: '步骤路由（每步一个模型）',
+      stepsAdd: '添加步骤',
+      stepsNamePlaceholder: '步骤名（如 research）',
+      stepsRemove: '移除',
+      stepsHint:
+        '像天枢的模型分工：给每个步骤配一个模型，然后把目标拆成多个串行子委派，委派时在 label 末尾加 #步骤名（如 调研报告#research），该步即走对应路由。优先级：逐专家 > 团队角色 > 步骤 > 主路由。',
       failoverLabel: '故障切换路由（可选）',
       failoverHint:
         '被钉住的子代理在运行中撞上额度耗尽、鉴权失效、适配器消失等车道级故障时，其后续请求会被改写到这条备用路由（仅切换一次）。留空 = 关闭。与「团队模式注入」共用下面两个下拉的选择。',
@@ -101,6 +107,12 @@ window.__ModuleLoader__.load({
       engineBlocked: 'One-shot subagent engine — agency-agents sets maxDepth, so a summon blocks until every expert finishes',
       engineAbsent: 'Agency is not installed — injection only reaches Agent-Teams members',
       engineUnknown: 'Could not read the agency row; assuming team mode',
+      stepsLabel: 'Step routes (one model per step)',
+      stepsAdd: 'Add step',
+      stepsNamePlaceholder: 'step name (e.g. research)',
+      stepsRemove: 'Remove',
+      stepsHint:
+        'Like the Tianshu model division: give each step its own model, then split the goal into serial sub-delegations labelled with #step at the end of the label (e.g. 调研报告#research). Priority: experts > roles > steps > main route.',
       failoverLabel: 'Failover route (optional)',
       failoverHint:
         'When a pinned child hits a lane failure mid-flight (quota drained, auth revoked, adapter gone), its next requests are rewritten to this backup route (once). Leave empty to disable. Shares the two dropdowns below with team injection.',
@@ -116,7 +128,15 @@ window.__ModuleLoader__.load({
     const inject = ['slots', 'locale', 'remote', 'remote.session', 'configForms']
 
     function emptyRoute() {
-      return { provider: '', model: '', reasoningEffort: '', teamInjection: true, failoverProvider: '', failoverModel: '' }
+      return {
+        provider: '',
+        model: '',
+        reasoningEffort: '',
+        teamInjection: true,
+        failoverProvider: '',
+        failoverModel: '',
+        steps: []
+      }
     }
 
     function sameRoute(left, right) {
@@ -126,8 +146,16 @@ window.__ModuleLoader__.load({
         left.reasoningEffort === right.reasoningEffort &&
         left.teamInjection === right.teamInjection &&
         left.failoverProvider === right.failoverProvider &&
-        left.failoverModel === right.failoverModel
+        left.failoverModel === right.failoverModel &&
+        sameSteps(left.steps, right.steps)
       )
+    }
+
+    function sameSteps(left, right) {
+      const a = Array.isArray(left) ? left : []
+      const b = Array.isArray(right) ? right : []
+      if (a.length !== b.length) return false
+      return a.every((row, index) => row.name === b[index].name && row.provider === b[index].provider && row.model === b[index].model)
     }
 
     /** Small observable store; the component subscribes with useSyncExternalStore. */
@@ -161,7 +189,15 @@ window.__ModuleLoader__.load({
         failoverModel:
           value.failoverRoute !== null && typeof value.failoverRoute === 'object' && typeof value.failoverRoute.model === 'string'
             ? value.failoverRoute.model
-            : ''
+            : '',
+        steps:
+          value.steps !== null && typeof value.steps === 'object' && !Array.isArray(value.steps)
+            ? Object.entries(value.steps).map(([name, route]) => ({
+                name,
+                provider: route && typeof route.provider === 'string' ? route.provider : '',
+                model: route && typeof route.model === 'string' ? route.model : ''
+              }))
+            : []
       }
     }
 
@@ -347,6 +383,33 @@ window.__ModuleLoader__.load({
             landed: false
           })
         },
+        addStep() {
+          const state = store.get()
+          publish({
+            draft: { ...state.draft, steps: [...state.draft.steps, { name: '', provider: '', model: '' }] },
+            touched: true,
+            conflict: false,
+            failed: false,
+            landed: false,
+            precheck: null
+          })
+        },
+        setStep(index, patch) {
+          const state = store.get()
+          const steps = state.draft.steps.map((row, i) => (i === index ? { ...row, ...patch } : row))
+          publish({ draft: { ...state.draft, steps }, touched: true, conflict: false, failed: false, landed: false, precheck: null })
+        },
+        removeStep(index) {
+          const state = store.get()
+          publish({
+            draft: { ...state.draft, steps: state.draft.steps.filter((_, i) => i !== index) },
+            touched: true,
+            conflict: false,
+            failed: false,
+            landed: false,
+            precheck: null
+          })
+        },
         setFailover(provider, model) {
           const state = store.get()
           publish({
@@ -418,13 +481,23 @@ window.__ModuleLoader__.load({
                     }
                   ]
                 : []
+            const stepObject = {}
+            for (const row of draft.steps ?? []) {
+              if (row.name.trim() === '' || row.provider === '' || row.model === '') continue
+              stepObject[row.name.trim()] = { provider: row.provider, model: row.model }
+            }
+            const stepOps =
+              Object.keys(stepObject).length > 0
+                ? [{ op: 'set', path: ['steps'], value: stepObject }]
+                : []
             await scope.mutate(
               [
                 { op: 'set', path: ['provider'], value: draft.provider },
                 { op: 'set', path: ['model'], value: draft.model },
                 { op: 'set', path: ['reasoningEffort'], value: draft.reasoningEffort },
                 { op: 'set', path: ['teamInjection'], value: draft.teamInjection },
-                ...failoverOps
+                ...failoverOps,
+                ...stepOps
               ],
               snap.revision
             )
@@ -509,6 +582,15 @@ window.__ModuleLoader__.load({
       fontSize: '13px'
     }
     const HINT_STYLE = { margin: 0, fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' }
+    const INPUT_STYLE = {
+      width: '100%',
+      padding: '6px 8px',
+      borderRadius: '8px',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      background: 'var(--dsw-alias-bg-module-platform)',
+      color: 'var(--dsw-alias-label-primary)',
+      fontSize: '13px'
+    }
 
     function fieldRow(t, text, control) {
       return h(
@@ -684,6 +766,69 @@ window.__ModuleLoader__.load({
               h('p', { style: HINT_STYLE }, label(t, 'failoverHint'))
             )
           : null,
+        h(
+          'p',
+          { style: { margin: 0, fontSize: '13px', color: 'var(--dsw-alias-label-primary)', fontWeight: 600 } },
+          label(t, 'stepsLabel')
+        ),
+        ...(state.draft.steps ?? []).map((row, index) =>
+          h(
+            'div',
+            { key: `step-${index}`, style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto', gap: '8px', alignItems: 'center' } },
+            h('input', {
+              placeholder: label(t, 'stepsNamePlaceholder'),
+              value: row.name,
+              disabled: !editable,
+              style: INPUT_STYLE,
+              onChange: (event) => face.actions.setStep(index, { name: event.currentTarget.value })
+            }),
+            h(
+              'select',
+              {
+                style: SELECT_STYLE,
+                value: row.provider,
+                disabled: !editable,
+                onChange: (event) => face.actions.setStep(index, { provider: event.currentTarget.value, model: '' })
+              },
+              h('option', { value: '' }, '—'),
+              providers.map((provider) => h('option', { key: provider.id, value: provider.id }, provider.name))
+            ),
+            h(
+              'select',
+              {
+                style: SELECT_STYLE,
+                value: row.model,
+                disabled: !editable,
+                onChange: (event) => face.actions.setStep(index, { model: event.currentTarget.value })
+              },
+              h('option', { value: '' }, '—'),
+              rows
+                .filter((candidate) => candidate.provider === row.provider)
+                .map((candidate) => h('option', { key: `${index}-${candidate.provider}/${candidate.model}`, value: candidate.model }, candidate.modelName))
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: BUTTON_STYLE,
+                disabled: !editable,
+                onClick: () => face.actions.removeStep(index)
+              },
+              label(t, 'stepsRemove')
+            )
+          )
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            style: BUTTON_STYLE,
+            disabled: !editable,
+            onClick: () => face.actions.addStep()
+          },
+          label(t, 'stepsAdd')
+        ),
+        h('p', { style: HINT_STYLE }, label(t, 'stepsHint')),
         h(
           'p',
           { style: HINT_STYLE },

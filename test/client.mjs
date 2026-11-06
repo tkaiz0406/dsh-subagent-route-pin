@@ -282,5 +282,42 @@ function makeContext(options = {}) {
   )
 }
 
+// --- steps editor: rows serialize into one steps object op ---------------
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  face.actions.addStep()
+  face.actions.setStep(0, { name: 'research', provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' })
+  face.actions.addStep()
+  face.actions.setStep(1, { name: 'code', provider: 'deepseek-account', model: 'deepseek-pro' })
+  await face.actions.save()
+  const stepsOp = state.mutations.at(-1).ops.find((op) => op.path[0] === 'steps')
+  check(
+    'save serializes the steps map as one object op',
+    stepsOp !== undefined &&
+      stepsOp.value.research.provider === 'our-free-model' &&
+      stepsOp.value.code.model === 'deepseek-pro',
+    JSON.stringify(stepsOp)
+  )
+  check(
+    'accepted route mirrors the steps rows back',
+    snapshot().saved.steps.length === 2 && snapshot().saved.steps[0].name === 'research',
+    JSON.stringify(snapshot().saved.steps)
+  )
+  // Removing both rows drops the op entirely (empty map = absent).
+  face.actions.removeStep(0)
+  face.actions.removeStep(0)
+  await face.actions.save()
+  const lastOps = state.mutations.at(-1).ops
+  check(
+    'no rows means no steps op',
+    lastOps.every((op) => op.path[0] !== 'steps'),
+    JSON.stringify(lastOps.map((op) => op.path[0]))
+  )
+}
+
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)
