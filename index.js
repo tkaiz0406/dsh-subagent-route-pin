@@ -980,6 +980,7 @@ class TeamInjectionAdapter {
             if (claimed) original = request.agentOptions
             request.agentOptions = agentOptions
             injected = picked
+            pinned.recordRun({ label: spec.label, route: picked.route, outcome: 'pinned', channel: 'team' })
             ctx.logger.info(
               `${PLUGIN}: team member label=${JSON.stringify(spec.label ?? null)} -> ` +
                 `${routeKey(picked.route)}${picked.route.reasoningEffort === undefined ? '' : ` effort=${picked.route.reasoningEffort}`} (${picked.source})`
@@ -1007,6 +1008,7 @@ class TeamInjectionAdapter {
         // throw away Agent Teams' own member route.
         if (original === undefined) delete request.agentOptions
         else request.agentOptions = original
+        pinned.recordRun({ label: spec.label, route: injected.route, outcome: 'failed', reason: describeError(error), channel: 'team' })
         ctx.logger.warn(
           `${PLUGIN}: team member ${JSON.stringify(spec.label ?? null)} failed to start on ${routeKey(injected.route)} ` +
             `(${describeError(error)}); retrying on the ${original === undefined ? 'inherited' : 'requested'} route`
