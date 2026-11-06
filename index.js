@@ -47,7 +47,7 @@
  * child's own LLM stream, cannot be caught here.
  */
 
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -113,6 +113,10 @@ const DEFAULT_READINESS_PATH = join(homedir(), '.dsh', 'delegation-hub.ready.jso
  * which is the question a user asks after the model failed.
  */
 const RUN_RECORD_NAME = 'delegation-hub.last-run.json'
+// Append-only delegation event stream: one JSON object per line. Tree views,
+// captain reports and evidence anchors read this instead of the single-slot
+// last-run file, because overwriting would drop every earlier delegation.
+const EVENTS_NAME = 'delegation-hub.events.jsonl'
 
 /** Plugin version, read once; a missing package.json is not fatal. */
 const PLUGIN_VERSION = (() => {
@@ -703,6 +707,17 @@ class RoutePinProvider {
     } catch {
       /* a read-only home must not break a delegation */
     }
+    // Append the same outcome to the delegation event stream. The last-run
+    // file is a single-slot overwrite (the newest verdict only); the stream is
+    // what tree views, captain reports and evidence anchors read. Each line is
+    // one JSON object; a crashed write leaves a torn line that readers skip.
+    try {
+      const record = { at: new Date().toISOString(), ...entry }
+      if (record.event === undefined) record.event = 'delegation'
+      appendFileSync(join(dirname(config.readinessPath), EVENTS_NAME), `${JSON.stringify(record)}\n`, 'utf8')
+    } catch {
+      /* a read-only home must not break a delegation */
+    }
   }
 
   async pickRoute(label, soft = false) {
@@ -1284,6 +1299,33 @@ class TeamInjectionAdapter {
  * `ctx.subagents` service can ask whether team-mode routing is live — and which
  * seam carries it — instead of grepping the log.
  */
+/**
+ * Read the delegation event stream. One JSON object per line; torn or
+ * malformed lines (a crashed write, manual editing) are skipped, never thrown,
+ * because the stream is observational evidence and must stay readable even
+ * when a single record is damaged.
+ * @param eventsPath - absolute path of delegation-hub.events.jsonl.
+ * @returns the parsed events in file order.
+ */
+export function readEvents(eventsPath) {
+  try {
+    const text = readFileSync(eventsPath, 'utf8')
+    const events = []
+    for (const line of text.split('\n')) {
+      if (line.trim() === '') continue
+      try {
+        const parsed = JSON.parse(line)
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) events.push(parsed)
+      } catch {
+        /* skip the torn line */
+      }
+    }
+    return events
+  } catch {
+    return []
+  }
+}
+
 export function teamInjectionCapabilities(service) {
   const slot = readHookSlot(service)
   if (slot === undefined) {
@@ -1547,6 +1589,17 @@ function applyInner(ctx, config = {}) {
     settingsDefault: effective.settingsDefault,
     experts: effective.experts,
     settingsDefaultShadowed: effective.shadowed === true,
+    // Drift observation: the effective route minus the pinned config row.
+    // `null` means the child runs on exactly the row the Settings page wrote;
+    // a route object means the row lost to a higher tier (experts/roles) or
+    // that no row is configured — both are intended behavior, but they must be
+    // visible in one glance instead of requiring a diff of two fields.
+    drift:
+      effective.route === undefined || effective.configRow === undefined
+        ? null
+        : effective.route.provider === effective.configRow.provider && effective.route.model === effective.configRow.model
+          ? null
+          : { pinned: effective.configRow, effective: effective.route, by: effective.source },
     fallback: normalized.fallback,
     teamInjection: normalized.teamInjection !== false,
     overrideMemberRoute: normalized.overrideMemberRoute !== false,

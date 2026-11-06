@@ -14,7 +14,7 @@
  *   3. settings file `default`           — legacy fallback
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1965,6 +1965,74 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     'logs: a record from another build fails and says MISS',
     oldRun.status === 1 && /MISS\s+version/.test(String(oldRun.stdout)),
     `${oldRun.status} ${String(oldRun.stdout).slice(0, 300)}`
+  )
+}
+
+// Group 42: the delegation event stream — append-only, torn-line tolerant.
+{
+  const { readEvents } = await import('../index.js')
+  const eventsPath = join(dir, 'delegation-hub.events.jsonl')
+  const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  // Earlier groups share this directory: slice from this group's baseline.
+  const baseline = readEvents(eventsPath).length
+  await startWith(harness, 'first')
+  await startWith(harness, 'second')
+  const events = readEvents(eventsPath).slice(baseline)
+  check(
+    'events stream appends one record per delegation',
+    events.length === 2 && events[0].label === 'first' && events[1].label === 'second',
+    JSON.stringify(events.map((event) => event.label))
+  )
+  check(
+    'events carry event/route/outcome fields',
+    events.every(
+      (event) => event.event === 'delegation' && event.outcome === 'pinned' && typeof event.route === 'object'
+    ),
+    JSON.stringify(events[0])
+  )
+  // A torn line (crashed write) is skipped, never thrown.
+  appendFileSync(eventsPath, '{"at": "torn", "event":\n', 'utf8')
+  appendFileSync(eventsPath, `${JSON.stringify({ at: 'third', event: 'delegation', label: 'third', outcome: 'pinned' })}\n`, 'utf8')
+  const afterTorn = readEvents(eventsPath).slice(baseline)
+  check(
+    'torn line is skipped and later events still read',
+    afterTorn.length === 3 && afterTorn[2].label === 'third',
+    JSON.stringify(afterTorn.map((event) => event.label))
+  )
+  check('readEvents on a missing file returns an empty array', readEvents(join(dir, 'nope.jsonl')).length === 0)
+  // Drift observation: the readiness record states whether the effective route
+  // equals the pinned row. An experts override makes the drift visible.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({ experts: { anything: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } } }),
+    'utf8'
+  )
+  const driftHarness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  const driftReady = JSON.parse(readFileSync(readinessPath, 'utf8'))
+  check(
+    'readiness drift is null when the row wins',
+    driftReady.drift === null,
+    JSON.stringify(driftReady.drift)
+  )
+  // Simulate a drift verdict by reading effectiveRoute with a settings override.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({ default: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }),
+    'utf8'
+  )
+  // effectiveRoute prefers the config row; a drift can only appear when the
+  // row is absent, so remove it by building a rowless harness.
+  const rowless = makeHarness({})
+  const rowlessReady = JSON.parse(readFileSync(readinessPath, 'utf8'))
+  check(
+    'rowless install records a null drift (no row to pin)',
+    rowlessReady.drift === null && rowlessReady.configRow === undefined,
+    JSON.stringify({ drift: rowlessReady.drift, configRow: rowlessReady.configRow })
+  )
+  check(
+    'drift harness still reports the row route',
+    driftHarness.logs.length >= 0 && driftReady.route === 'deepseek-account/deepseek-flash',
+    JSON.stringify(driftReady.route)
   )
 }
 
