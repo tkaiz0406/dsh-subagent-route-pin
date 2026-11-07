@@ -932,8 +932,16 @@ class RoutePinProvider {
     if (picked.stepKey !== undefined) {
       const directive = stepDirectivePrefix(picked.stepKey, picked.lane)
       if (directive !== '' && Array.isArray(request.prompt)) {
-        const first = request.prompt.find((block) => block !== null && typeof block === 'object' && block.type === 'text')
-        if (first !== undefined) first.text = `${directive}${first.text ?? ''}`
+        // Rebuild the array instead of writing into the caller's text block:
+        // `{ ...request }` above is a shallow copy and the retry below reuses the
+        // same prompt object, so an in-place prepend would stack a second
+        // directive on the inherited-route retry.
+        const idx = request.prompt.findIndex((block) => block !== null && typeof block === 'object' && block.type === 'text')
+        if (idx >= 0) {
+          const block = request.prompt[idx]
+          const text = typeof block.text === 'string' && block.text.startsWith(directive) ? block.text : `${directive}${block.text ?? ''}`
+          request.prompt = request.prompt.map((b, i) => (i === idx ? { ...b, text } : b))
+        }
       }
     }
     ctx.logger.info(
@@ -1236,8 +1244,15 @@ class TeamInjectionAdapter {
             if (picked.stepKey !== undefined && request.prompt !== undefined && Array.isArray(request.prompt)) {
               const directive = stepDirectivePrefix(picked.stepKey, picked.lane)
               if (directive !== '') {
-                const first = request.prompt.find((block) => block !== null && typeof block === 'object' && block.type === 'text')
-                if (first !== undefined) first.text = `${directive}${first.text ?? ''}`
+                // Same non-mutating rewrite as the single-shot path: the start
+                // failure retry below re-calls the seam with this spec, and an
+                // in-place prepend would stack the directive twice.
+                const idx = request.prompt.findIndex((block) => block !== null && typeof block === 'object' && block.type === 'text')
+                if (idx >= 0) {
+                  const block = request.prompt[idx]
+                  const text = typeof block.text === 'string' && block.text.startsWith(directive) ? block.text : `${directive}${block.text ?? ''}`
+                  request.prompt = request.prompt.map((b, i) => (i === idx ? { ...b, text } : b))
+                }
               }
             }
             pinned.recordRun({ label: spec.label, route: picked.route, outcome: 'pinned', channel: 'team', source: picked.source })

@@ -28,7 +28,11 @@ window.__ModuleLoader__.load({
      * inserts, then the package-derived id the loader may fall back to.
      */
     const CONFIG_NS_CANDIDATES = ['delegation-hub', 'dsh-delegation-hub']
-    const EFFORTS = ['low', 'medium', 'high']
+    // Empty slot = leave the effort unpinned (the host then omits it). max and
+    // extra_high exist on real lanes (deepseek-flash: low/high/max; trae sends
+    // extra_high), and a stored value outside this list would silently render
+    // as the first option in a controlled select, so the list must cover them.
+    const EFFORTS = ['', 'low', 'medium', 'high', 'max', 'extra_high']
 
     const zh = {
       title: '委派中枢',
@@ -161,7 +165,14 @@ window.__ModuleLoader__.load({
       const a = Array.isArray(left) ? left : []
       const b = Array.isArray(right) ? right : []
       if (a.length !== b.length) return false
-      return a.every((row, index) => row.name === b[index].name && row.provider === b[index].provider && row.model === b[index].model)
+      return a.every(
+      (row, index) =>
+        row.name === b[index].name &&
+        row.provider === b[index].provider &&
+        row.model === b[index].model &&
+        (row.expert ?? '') === (b[index].expert ?? '') &&
+        (row.skills ?? '') === (b[index].skills ?? '')
+    )
     }
 
     /** Small observable store; the component subscribes with useSyncExternalStore. */
@@ -512,10 +523,18 @@ window.__ModuleLoader__.load({
               }
               stepObject[row.name.trim()] = lane
             }
+            // An empty editor must CLEAR the stored row, not skip the op: omitting
+            // stepsJson leaves the old value in the document and the deleted rows
+            // resurrect on the next sync. The host treats '' as absent, so an
+            // explicit empty string is the clear signal (only sent when there is
+            // something stored to clear).
+            const storedSteps = snapshot()?.value?.stepsJson
             const stepOps =
               Object.keys(stepObject).length > 0
                 ? [{ op: 'set', path: ['stepsJson'], value: JSON.stringify(stepObject) }]
-                : []
+                : typeof storedSteps === 'string' && storedSteps.trim() !== ''
+                  ? [{ op: 'set', path: ['stepsJson'], value: '' }]
+                  : []
             await scope.mutate(
               [
                 { op: 'set', path: ['provider'], value: draft.provider },
@@ -718,7 +737,7 @@ window.__ModuleLoader__.load({
               disabled: !editable,
               onChange: (event) => face.actions.setEffort(event.currentTarget.value)
             },
-            EFFORTS.map((effort) => h('option', { key: effort, value: effort }, effort))
+            EFFORTS.map((effort) => h('option', { key: effort || 'none', value: effort }, effort === '' ? '—' : effort))
           )
         ),
         h(
@@ -781,13 +800,15 @@ window.__ModuleLoader__.load({
                     onChange: (event) => face.actions.setFailover(state.draft.failoverProvider, event.currentTarget.value)
                   },
                   h('option', { value: '' }, '—'),
-                  rows.map((row) =>
-                    h(
-                      'option',
-                      { key: `fo-${row.provider}/${row.model}`, value: row.model },
-                      row.modelName
+                  rows
+                    .filter((candidate) => candidate.provider === state.draft.failoverProvider)
+                    .map((candidate) =>
+                      h(
+                        'option',
+                        { key: `fo-${candidate.provider}/${candidate.model}`, value: candidate.model },
+                        candidate.modelName
+                      )
                     )
-                  )
                 )
               ),
               h('p', { style: HINT_STYLE }, label(t, 'failoverHint'))

@@ -21,6 +21,31 @@ function check(label, condition, detail) {
   }
 }
 
+/** Test-side mirror of the card's dirty rule (sameRoute + sameSteps). */
+function sameRouteLike(left, right) {
+  const la = Array.isArray(left.steps) ? left.steps : []
+  const ra = Array.isArray(right.steps) ? right.steps : []
+  const stepsEq =
+    la.length === ra.length &&
+    la.every(
+      (row, i) =>
+        row.name === ra[i].name &&
+        row.provider === ra[i].provider &&
+        row.model === ra[i].model &&
+        (row.expert ?? '') === (ra[i].expert ?? '') &&
+        (row.skills ?? '') === (ra[i].skills ?? '')
+    )
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.teamInjection === right.teamInjection &&
+    left.failoverProvider === right.failoverProvider &&
+    left.failoverModel === right.failoverModel &&
+    stepsEq
+  )
+}
+
 // --- load the bundle the way the host does --------------------------------
 let loaded
 const React = {
@@ -308,15 +333,77 @@ function makeContext(options = {}) {
     snapshot().saved.steps.length === 2 && snapshot().saved.steps[0].name === 'research',
     JSON.stringify(snapshot().saved.steps)
   )
-  // Removing both rows drops the op entirely (empty map = absent).
+  // Removing both rows after they were stored must CLEAR the document row:
+  // omitting the op would leave the old stepsJson in place and the deleted
+  // rows would resurrect on the next sync. The host treats '' as absent.
   face.actions.removeStep(0)
   face.actions.removeStep(0)
   await face.actions.save()
   const lastOps = state.mutations.at(-1).ops
+  const lastClear = lastOps.find((op) => op.path[0] === 'stepsJson')
   check(
-    'no rows means no steps op',
-    lastOps.every((op) => op.path[0] !== 'stepsJson'),
+    'no rows means an explicit empty-string clear op',
+    lastClear !== undefined && lastClear.value === '',
     JSON.stringify(lastOps.map((op) => op.path[0]))
+  )
+}
+
+// --- expert/skills edits mark the card dirty and reach the save op ---------
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  face.actions.addStep()
+  face.actions.setStep(0, { name: 'review', provider: 'deepseek-account', model: 'deepseek-pro' })
+  await face.actions.save()
+  // Saved baseline now carries the row. Editing ONLY expert/skills must flip
+  // dirty (the save button enables) and the fields must land in stepsJson.
+  const savedRow = snapshot().saved.steps[0]
+  face.actions.setStep(0, { expert: '代码审查工程师', skills: 'aik_auto_memory_use, leanrea-win' })
+  const dirtyState = face.store.get()
+  check(
+    'expert/skills-only edit flips dirty (sameSteps compares the new fields)',
+    dirtyState.touched === true &&
+      dirtyState.draft.steps[0].expert === '代码审查工程师' &&
+      !sameRouteLike(dirtyState.draft, dirtyState.saved),
+    JSON.stringify({ dirtyCheck: sameRouteLike(dirtyState.draft, dirtyState.saved), touched: dirtyState.touched })
+  )
+  await face.actions.save()
+  const op = state.mutations.at(-1).ops.find((entry) => entry.path[0] === 'stepsJson')
+  const lane = op === undefined ? undefined : JSON.parse(op.value).review
+  check(
+    'expert/skills-only edit serializes into stepsJson',
+    lane !== undefined && lane.expert === '代码审查工程师' &&
+      Array.isArray(lane.skills) && lane.skills.length === 2,
+    JSON.stringify(op)
+  )
+}
+
+// --- removing every row sends an explicit clear op -------------------------
+{
+  const { ctx, state } = makeContext({
+    value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', stepsJson: JSON.stringify({ research: { provider: 'a', model: 'b' } }) }
+  })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  // The stored stepsJson parses into one editor row.
+  check(
+    'stored stepsJson renders one editor row',
+    snapshot().draft.steps.length === 1 && snapshot().draft.steps[0].name === 'research',
+    JSON.stringify(snapshot().draft.steps)
+  )
+  face.actions.removeStep(0)
+  await face.actions.save()
+  const ops = state.mutations.at(-1).ops
+  const clearOp = ops.find((entry) => entry.path[0] === 'stepsJson')
+  check(
+    'removing all rows sends an explicit empty-string clear op',
+    clearOp !== undefined && clearOp.value === '',
+    JSON.stringify(ops)
   )
 }
 
