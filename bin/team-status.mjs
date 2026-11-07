@@ -119,6 +119,39 @@ function renderEvents(events) {
 </section>`
 }
 
+/* Watchdog-flavoured observation (display only): a member whose newest
+ * delegation event is older than STALE_MINUTES while its team still lists it
+ * as in_progress gets a `~stale` flag. Read from the events stream, never
+ * mutates anything, and TEAM_STATUS_STALE_MINUTES=0 turns it off. */
+const STALE_MINUTES = (() => {
+  const raw = Number(process.env.TEAM_STATUS_STALE_MINUTES)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 20
+})()
+
+function staleLabels(events, teams, now = Date.now()) {
+  if (STALE_MINUTES === 0) return new Set()
+  const newest = new Map()
+  for (const event of events) {
+    const label = typeof event?.label === 'string' ? event.label : ''
+    if (label === '') continue
+    const member = label.startsWith('agent-teams:') ? label.slice(label.lastIndexOf(':') + 1) : label
+    const at = typeof event.at === 'string' ? Date.parse(event.at) : NaN
+    if (Number.isNaN(at)) continue
+    const prev = newest.get(member)
+    if (prev === undefined || at > prev) newest.set(member, at)
+  }
+  const stale = new Set()
+  for (const team of teams) {
+    if (team.phase !== undefined && team.phase !== 'running') continue
+    for (const member of team.members ?? []) {
+      if (member?.status !== 'running' || typeof member?.name !== 'string') continue
+      const at = newest.get(member.name)
+      if (at !== undefined && now - at > STALE_MINUTES * 60000) stale.add(member.name)
+    }
+  }
+  return stale
+}
+
 function readTeams(dir) {
   const root = path.join(dir, '.agent-teams')
   let entries
@@ -161,7 +194,7 @@ function pad(text, width) {
   return out + ' '.repeat(Math.max(0, width - len))
 }
 
-function printTeams(teams) {
+function printTeams(teams, stale = new Set()) {
   if (!teams.length) {
     console.log('没有找到任何团队。检查 --dir 是否指向工作区根目录（它下面应有 .agent-teams/）。')
     return
@@ -178,7 +211,8 @@ function printTeams(teams) {
     }
     for (const member of team.members ?? []) {
       const model = [member.provider, member.model].filter(Boolean).join('/')
-      console.log(`  · ${pad(member.name, 12)} ${pad(member.role ?? '', 8)} ${pad(STATUS_LABEL[member.status] ?? member.status ?? '', 6)} ${model}`)
+      const staleMark = stale.has(member.name) ? ' ~stale' : ''
+      console.log(`  · ${pad(member.name, 12)} ${pad(member.role ?? '', 8)} ${pad(STATUS_LABEL[member.status] ?? member.status ?? '', 6)} ${model}${staleMark}`)
     }
     for (const task of [...tasks].sort((a, b) => String(a.id).localeCompare(String(b.id)))) {
       const deps = (task.dependencies ?? []).length ? ` <- ${task.dependencies.join(',')}` : ''
@@ -195,14 +229,15 @@ function printTeams(teams) {
 const escapeHtml = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
 
-function renderTeam(team) {
+function renderTeam(team, staleSet = new Set()) {
   const { tasks, done, total, pct } = summarize(team)
   const badge = (status) => `<span class="b b-${escapeHtml(status)}">${escapeHtml(STATUS_LABEL[status] ?? status ?? '?')}</span>`
   const staged = team.planReviewState === 'awaiting_review'
   const members = (team.members ?? [])
     .map((m) => {
       const model = [m.provider, m.model].filter(Boolean).join('/')
-      return `<li><b>${escapeHtml(m.name)}</b> <span class="dim">${escapeHtml(m.role ?? '')}</span> ${badge(m.status)} <code>${escapeHtml(model)}</code></li>`
+      const stale = staleSet.has(m.name) ? ' <span class="b b-staged">~stale</span>' : ''
+      return `<li><b>${escapeHtml(m.name)}</b> <span class="dim">${escapeHtml(m.role ?? '')}</span> ${badge(m.status)} <code>${escapeHtml(model)}</code>${stale}</li>`
     })
     .join('')
   const rows = [...tasks]
@@ -224,7 +259,7 @@ function renderTeam(team) {
 </section>`
 }
 
-const PAGE = (teams, dirs, events = []) => `<!doctype html>
+const PAGE = (teams, dirs, events = [], stale = new Set()) => `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="refresh" content="2">
 <title>Agent Teams 状态</title>
 <style>
@@ -259,7 +294,7 @@ const PAGE = (teams, dirs, events = []) => `<!doctype html>
 <body>
 <h1>Agent Teams 状态</h1>
 <p class="dim">每 2 秒自动刷新 · ${escapeHtml(new Date().toLocaleString('zh-CN'))} · 扫描目录 ${dirs.map((d) => `<code>${escapeHtml(d)}</code>`).join(' ')}</p>
-${teams.length ? teams.map(renderTeam).join('\n') : '<section><p class="dim">没有找到团队。检查启动时的工作目录，或加 --dir 指向你的项目根目录。</p></section>'}
+${teams.length ? teams.map((team) => renderTeam(team, stale)).join('\n') : '<section><p class="dim">没有找到团队。检查启动时的工作目录，或加 --dir 指向你的项目根目录。</p></section>'}
 ${renderEvents(events)}
 </body></html>`
 
@@ -274,7 +309,8 @@ function collect(dirs) {
   }
   return {
     teams: teams.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)),
-    events
+    events,
+    stale: staleLabels(events, teams)
   }
 }
 
@@ -285,9 +321,9 @@ async function serve(args) {
       res.end('ok')
       return
     }
-    const { teams, events } = collect(args.dirs)
+    const { teams, events, stale } = collect(args.dirs)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(PAGE(teams, args.dirs, events))
+    res.end(PAGE(teams, args.dirs, events, stale))
   })
   const port = await new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -305,4 +341,4 @@ if (args.help) {
   process.exit(0)
 }
 if (args.serve) await serve(args)
-else printTeams(collect(args.dirs))
+else { const result = collect(args.dirs); printTeams(result.teams, result.stale) }

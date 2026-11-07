@@ -86,6 +86,27 @@ cat ~/.dsh/delegation-hub.ready.json                  # 有且 at 是本次启�
 
 **装完不配也能用**：路由没填、或填的 provider/model 在当前账号里不存在时，插件只打一条警告，子 agent 照旧继承主 agent 的模型——不会让召唤失败。`strict: true` 才会把它变成硬错误。
 
+## 与宿主自带路由配置的差距（诚实版）
+
+Agent Teams 本身有 `memberLlmProvider` / `memberModel`，专家团有 profile 行——不装本插件也能给成员配模型。下表按 ds-agent 式三态（Ahead 领先 / Parity 同能 / Behind 落后）写清差在哪，供选型；最后更新 2026-11-07，对应 commit `259b441`。
+
+| 维度 | 宿主自带配置 | 本插件 | 判定 |
+|---|---|---|---|
+| 给成员指定模型 | `memberLlmProvider`/`memberModel`，每个团队一行，改一次要动所有团队配置 | 一处配置（设置页/CLI/JSON 文件）喂给全部三类委派 | Parity（入口更少） |
+| 分层路由优先级 | 无分层概念：一个团队一套成员路由 | experts > roles > steps > 配置行 > settings default 五级，逐专家/逐角色/逐步骤各可单独钉 | **Ahead** |
+| 每步一模型 | 做不到（成员路由按团队粒度） | `steps` + label `#步骤名` 后缀，串行子委派各走各的模型，还可挂专家身份与技能指令 | **Ahead** |
+| 热切换 | 改 profile patch 后需重启或重载 | `volatile` 字段 + 每次委派重读 settings 文件，保存即对下一次委派生效 | **Ahead** |
+| 运行中故障切换 | 无：成员车道中途配额耗尽只能人工换 | `failoverRoute` 监听五类车道码（QUOTA/RATE_LIMIT/AUTH/MISSING_CREDENTIAL/NO_ADAPTER），一次性改写后续请求并上报队长 | **Ahead** |
+| 目录预校验 | 无 | 保存前对照模型目录 advisory 提示（可强制写入）；委派时 `checkRoute` 对照 llm 目录，strict 可拒绝 | **Ahead** |
+| 取证 | 无 | last-run.json（单槽）+ events.jsonl（追加事件流，坏行跳过）+ ready.json（含 drift）+ 队长信箱上报 | **Ahead** |
+| 可观测面板 | 无 | `dsh-team-status` 文本面板 + `--serve` HTML 面板（含 `~stale` 无进展成员标记） | **Ahead** |
+| 持久化任务 | 宿主管（成员会话是宿主会话） | 本插件不持久化任务，只观测路由事件——任务恢复交给宿主 | Parity（职责边界） |
+| 审批门控 | 宿主审批体系 | 本插件不加审批：路由选择本身就是主人动作 | Behind（若你要的是 ds-agent 式 request_approval，那是宿主层需求，不是路由插件的事） |
+| 跨重启任务续跑 | 宿主管 | 同上，不涉及 | Parity |
+| 宿主版本耦合 | 无额外耦合 | 依赖 `SubagentRuntime.startActivation` 接缝，DSH 发 rc 需重验（`peerDependencies >=0.2.0-rc.1 <0.4.0` + 兼容矩阵） | Behind（内部契约风险，tests/logs.mjs 门禁缓解） |
+
+一句话：**宿主配置回答"这个团队用什么模型"，本插件回答"每一发委派该用什么模型、错了怎么办、怎么证明"**。只要你的路由需求停在团队粒度且永不切换，宿主自带配置就够；一旦需要逐专家/逐步骤/热切换/故障兜底中的任何一项，就是本插件存在的理由。
+
 ## 真正要改的只有两处
 
 想把子 agent 分到另一条车道，只需要两处：
