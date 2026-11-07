@@ -803,71 +803,73 @@ window.__ModuleLoader__.load({
             'div',
             {
               key: `step-${index}`,
-              style: {
-                display: 'grid',
-                gridTemplateColumns: 'minmax(120px, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) auto',
-                gap: '8px',
-                alignItems: 'center',
-                minWidth: 0
-              }
+              style: { display: 'grid', gap: '6px', padding: '6px 0', borderBottom: '1px solid var(--dsw-alias-border-l2)' }
             },
-            h('input', {
-              placeholder: label(t, 'stepsNamePlaceholder'),
-              value: row.name,
-              disabled: !editable,
-              maxLength: 40,
-              style: { ...INPUT_STYLE, minWidth: 0 },
-              onChange: (event) => face.actions.setStep(index, { name: event.currentTarget.value })
-            }),
             h(
-              'select',
-              {
-                style: SELECT_STYLE,
-                value: row.provider,
+              'div',
+              { style: { display: 'grid', gridTemplateColumns: 'minmax(140px, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto', gap: '8px', alignItems: 'center' } },
+              h('input', {
+                placeholder: label(t, 'stepsNamePlaceholder'),
+                value: row.name,
                 disabled: !editable,
-                onChange: (event) => face.actions.setStep(index, { provider: event.currentTarget.value, model: '' })
-              },
-              h('option', { value: '' }, '—'),
-              providers.map((provider) => h('option', { key: provider.id, value: provider.id }, provider.name))
+                maxLength: 40,
+                style: { ...INPUT_STYLE, minWidth: 0 },
+                onChange: (event) => face.actions.setStep(index, { name: event.currentTarget.value })
+              }),
+              h(
+                'select',
+                {
+                  style: SELECT_STYLE,
+                  value: row.provider,
+                  disabled: !editable,
+                  onChange: (event) => face.actions.setStep(index, { provider: event.currentTarget.value, model: '' })
+                },
+                h('option', { value: '' }, '—'),
+                providers.map((provider) => h('option', { key: provider.id, value: provider.id }, provider.name))
+              ),
+              h(
+                'select',
+                {
+                  style: SELECT_STYLE,
+                  value: row.model,
+                  disabled: !editable,
+                  onChange: (event) => face.actions.setStep(index, { model: event.currentTarget.value })
+                },
+                h('option', { value: '' }, '—'),
+                rows
+                  .filter((candidate) => candidate.provider === row.provider)
+                  .map((candidate) => h('option', { key: `${index}-${candidate.provider}/${candidate.model}`, value: candidate.model }, candidate.modelName))
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  style: BUTTON_STYLE,
+                  disabled: !editable,
+                  onClick: () => face.actions.removeStep(index)
+                },
+                label(t, 'stepsRemove')
+              )
             ),
             h(
-              'select',
-              {
-                style: SELECT_STYLE,
-                value: row.model,
+              'div',
+              { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px' } },
+              h('input', {
+                placeholder: label(t, 'stepsExpertPlaceholder'),
+                value: row.expert ?? '',
                 disabled: !editable,
-                onChange: (event) => face.actions.setStep(index, { model: event.currentTarget.value })
-              },
-              h('option', { value: '' }, '—'),
-              rows
-                .filter((candidate) => candidate.provider === row.provider)
-                .map((candidate) => h('option', { key: `${index}-${candidate.provider}/${candidate.model}`, value: candidate.model }, candidate.modelName))
-            ),
-            h('input', {
-              placeholder: label(t, 'stepsExpertPlaceholder'),
-              value: row.expert ?? '',
-              disabled: !editable,
-              maxLength: 60,
-              style: { ...INPUT_STYLE, minWidth: 0 },
-              onChange: (event) => face.actions.setStep(index, { expert: event.currentTarget.value })
-            }),
-            h('input', {
-              placeholder: label(t, 'stepsSkillsPlaceholder'),
-              value: row.skills ?? '',
-              disabled: !editable,
-              maxLength: 120,
-              style: { ...INPUT_STYLE, minWidth: 0 },
-              onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
-            }),
-            h(
-              'button',
-              {
-                type: 'button',
-                style: BUTTON_STYLE,
+                maxLength: 60,
+                style: { ...INPUT_STYLE, minWidth: 0 },
+                onChange: (event) => face.actions.setStep(index, { expert: event.currentTarget.value })
+              }),
+              h('input', {
+                placeholder: label(t, 'stepsSkillsPlaceholder'),
+                value: row.skills ?? '',
                 disabled: !editable,
-                onClick: () => face.actions.removeStep(index)
-              },
-              label(t, 'stepsRemove')
+                maxLength: 120,
+                style: { ...INPUT_STYLE, minWidth: 0 },
+                onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
+              })
             )
           )
         ),
