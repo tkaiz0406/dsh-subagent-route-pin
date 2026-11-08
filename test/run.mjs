@@ -623,6 +623,20 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
       firstText.text.includes('分析这个仓库'),
     JSON.stringify(firstText)
   )
+  // The single-shot run record carries the attribution for this delegation.
+  const singleRun = JSON.parse(
+    readFileSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), 'utf8')
+  )
+  check(
+    'single-shot pinned record carries model/step/expert/skills',
+    singleRun.outcome === 'pinned' &&
+      singleRun.model === 'our-free-model/deepseek-v4.1-flash-free' &&
+      singleRun.step === 'research' &&
+      singleRun.expert === '代码审查工程师' &&
+      Array.isArray(singleRun.skills) &&
+      singleRun.skills.join(',') === 'aik_auto_memory_use,leanrea-win',
+    JSON.stringify(singleRun)
+  )
   // A step without expert/skills must leave the prompt untouched.
   writeFileSync(
     settingsPath,
@@ -641,6 +655,98 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     plainText.text === '原样任务',
     JSON.stringify(plainText)
   )
+}
+
+// --- 18b5. attribution flows into the team-hook run record ----------------
+{
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      steps: {
+        research: {
+          provider: 'our-free-model',
+          model: 'deepseek-v4.1-flash-free',
+          expert: '代码审查工程师',
+          skills: ['aik_auto_memory_use', 'leanrea-win']
+        }
+      }
+    }),
+    'utf8'
+  )
+  const harness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  await harness.service.startActivation({ label: 'goal#research', request: { prompt: 'do', parent: {} } })
+  const teamRun = JSON.parse(readFileSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), 'utf8'))
+  check(
+    'team pinned record carries model/step/expert/skills',
+    teamRun.outcome === 'pinned' &&
+      teamRun.channel === 'team' &&
+      teamRun.model === 'our-free-model/deepseek-v4.1-flash-free' &&
+      teamRun.step === 'research' &&
+      teamRun.expert === '代码审查工程师' &&
+      Array.isArray(teamRun.skills) &&
+      teamRun.skills.join(',') === 'aik_auto_memory_use,leanrea-win',
+    JSON.stringify(teamRun)
+  )
+}
+
+// --- 18b6. the failover record keeps the attribution of the original pick --
+{
+  const childListeners = []
+  let failoverRequestListener
+  const childCtx = {
+    logger: { warn: () => {} },
+    on(event, listener) {
+      if (event === 'agent/request-error') childListeners.push(listener)
+      if (event === 'agent/request') failoverRequestListener = listener
+      return () => {}
+    }
+  }
+  const childAgent = { ctx: childCtx }
+  const harness = makeHarness(
+    {
+      provider: 'deepseek-account',
+      model: 'deepseek-flash',
+      failoverRoute: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' }
+    },
+    { agents: { get: (id) => (id === 'child-attr' ? childAgent : undefined) } }
+  )
+  harness.setActivation({ childId: 'child-attr', ok: true })
+  // The pick routes through a step lane (deepseek-pro) that is deliberately
+  // different from the failover lane, so the record's model can only come from
+  // the switched route while step/expert/skills come from the original pick.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      steps: {
+        research: {
+          provider: 'deepseek-account',
+          model: 'deepseek-pro',
+          expert: '代码审查工程师',
+          skills: ['aik_auto_memory_use', 'leanrea-win']
+        }
+      }
+    }),
+    'utf8'
+  )
+  await harness.service.startActivation({ label: 'goal#research', request: { prompt: 'do', parent: {} } })
+  check('attribution failover watcher armed', childListeners.length === 1, String(childListeners.length))
+  // Isolate the record so the next read sees only the failover entry.
+  rmSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), { force: true })
+  await childListeners[0]({ failure: { code: 'QUOTA' } }, async () => ({ kind: 'retry' }))
+  const failoverRun = JSON.parse(readFileSync(join(readinessPath, '..', 'delegation-hub.last-run.json'), 'utf8'))
+  check(
+    'failover record keeps model/step/expert/skills',
+    failoverRun.outcome === 'failover' &&
+      failoverRun.channel === 'team' &&
+      failoverRun.reason === 'QUOTA' &&
+      failoverRun.model === 'our-free-model/deepseek-v4.1-flash-free' &&
+      failoverRun.step === 'research' &&
+      failoverRun.expert === '代码审查工程师' &&
+      Array.isArray(failoverRun.skills) &&
+      failoverRun.skills.join(',') === 'aik_auto_memory_use,leanrea-win',
+    JSON.stringify(failoverRun)
+  )
+  void failoverRequestListener
 }
 
 // --- 18c. runtime failover watches the live child and swaps once ----------
@@ -2167,6 +2273,55 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     JSON.stringify(afterTorn.map((event) => event.label))
   )
   check('readEvents on a missing file returns an empty array', readEvents(join(dir, 'nope.jsonl')).length === 0)
+  // Attribution: a delegation that hits a step lane writes model/step/expert/skills.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      steps: {
+        research: {
+          provider: 'our-free-model',
+          model: 'deepseek-v4.1-flash-free',
+          expert: '代码审查工程师',
+          skills: ['aik_auto_memory_use', 'leanrea-win']
+        }
+      }
+    }),
+    'utf8'
+  )
+  const attrHarness = makeHarness({ provider: 'deepseek-account', model: 'deepseek-flash' })
+  await startWith(attrHarness, 'goal#research')
+  const attrEvent = readEvents(eventsPath)
+    .slice(baseline)
+    .find((event) => event.label === 'goal#research')
+  check(
+    'events carry model/step/expert/skills attribution',
+    attrEvent !== undefined &&
+      attrEvent.model === 'our-free-model/deepseek-v4.1-flash-free' &&
+      attrEvent.step === 'research' &&
+      attrEvent.expert === '代码审查工程师' &&
+      Array.isArray(attrEvent.skills) &&
+      attrEvent.skills.join(',') === 'aik_auto_memory_use,leanrea-win',
+    JSON.stringify(attrEvent)
+  )
+  // The team-status event table surfaces the attribution; old rows without the
+  // fields must still render instead of throwing.
+  const { renderEvents } = await import('../bin/team-status.mjs')
+  const rich = renderEvents([attrEvent])
+  check(
+    'team-status shows the model and skills/expert columns',
+    rich.includes('模型') &&
+      rich.includes('技能/专家') &&
+      rich.includes('our-free-model/deepseek-v4.1-flash-free') &&
+      rich.includes('代码审查工程师') &&
+      rich.includes('aik_auto_memory_use、leanrea-win'),
+    rich.slice(0, 600)
+  )
+  const legacy = renderEvents([{ at: '2026-01-01T00:00:00.000Z', label: 'old', outcome: 'pinned' }])
+  check(
+    'team-status renders a legacy event without attribution fields',
+    legacy.includes('old') && legacy.includes('<td>-</td>') && renderEvents([]) === '',
+    legacy.slice(0, 600)
+  )
   // Drift observation: the readiness record states whether the effective route
   // equals the pinned row. An experts override makes the drift visible.
   writeFileSync(

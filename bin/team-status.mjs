@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 
 const STATUS_ORDER = ['in_progress', 'pending', 'completed', 'failed', 'cancelled']
 const STATUS_LABEL = {
@@ -98,6 +99,18 @@ function readEvents(dir) {
   return events
 }
 
+/** 一列里拼「专家 + 技能」：新事件带归因，老事件缺字段就渲染成 '-'。 */
+function attributionWho(event) {
+  const parts = []
+  if (typeof event.expert === 'string' && event.expert.trim() !== '') parts.push(event.expert.trim())
+  if (Array.isArray(event.skills)) {
+    for (const skill of event.skills) {
+      if (typeof skill === 'string' && skill.trim() !== '') parts.push(skill.trim())
+    }
+  }
+  return parts.length > 0 ? parts.join('、') : '-'
+}
+
 function renderEvents(events) {
   if (events.length === 0) return ''
   const FAILURES = new Set(['failed', 'failover'])
@@ -107,14 +120,18 @@ function renderEvents(events) {
     .map((event) => {
       const lane = FAILURES.has(event.outcome) ? 'ev-bad' : 'ev-ok'
       const route = event.route ? `${event.route.provider}/${event.route.model}` : '-'
+      // 本次委派实际生效的模型（failover 记录里是切换后的）与命中的专家/技能。
+      // 老事件没有这些字段，逐字段降级成 '-'，坏行已在 readEvents 里跳过。
+      const model = typeof event.model === 'string' && event.model.trim() !== '' ? event.model : '-'
+      const who = attributionWho(event)
       const source = event.source ?? ''
       const reason = event.reason ? ` · ${event.reason}` : ''
-      return `<tr class="${lane}"><td>${escapeHtml(String(event.at ?? ''))}</td><td><code>${escapeHtml(String(event.label ?? ''))}</code></td><td>${escapeHtml(String(event.channel ?? '-'))}</td><td>${escapeHtml(String(event.outcome ?? ''))}</td><td><code>${escapeHtml(route)}</code></td><td>${escapeHtml(source)}${escapeHtml(reason)}</td></tr>`
+      return `<tr class="${lane}"><td>${escapeHtml(String(event.at ?? ''))}</td><td><code>${escapeHtml(String(event.label ?? ''))}</code></td><td>${escapeHtml(String(event.channel ?? '-'))}</td><td>${escapeHtml(String(event.outcome ?? ''))}</td><td><code>${escapeHtml(route)}</code></td><td><code>${escapeHtml(model)}</code></td><td>${escapeHtml(who)}</td><td>${escapeHtml(source)}${escapeHtml(reason)}</td></tr>`
     })
     .join('')
   return `<section>
   <header><h2>委派事件流</h2><span class="b b-pending">最近 ${Math.min(events.length, 40)} / 共 ${events.length}</span></header>
-  <table><thead><tr><th>时间</th><th>label</th><th>通道</th><th>结果</th><th>路由</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>时间</th><th>label</th><th>通道</th><th>结果</th><th>路由</th><th>模型</th><th>技能/专家</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table>
   <p class="dim">数据源 delegation-hub.events.jsonl（追加式事件流，坏行自动跳过）。</p>
 </section>`
 }
@@ -335,10 +352,24 @@ async function serve(args) {
   console.log('Ctrl+C 停止。团队状态每 2 秒自动刷新。')
 }
 
-const args = parseArgs(process.argv.slice(2))
-if (args.help) {
-  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].split('/**')[1].trim())
-  process.exit(0)
+// 只有本文件被直接执行时才跑 CLI；被 import（测试要复用 readEvents /
+// renderEvents 这些纯函数）时不能打印、更不能 process.exit。
+const isMain = (() => {
+  try {
+    return process.argv[1] !== undefined && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+})()
+
+if (isMain) {
+  const args = parseArgs(process.argv.slice(2))
+  if (args.help) {
+    console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].split('/**')[1].trim())
+    process.exit(0)
+  }
+  if (args.serve) await serve(args)
+  else { const result = collect(args.dirs); printTeams(result.teams, result.stale) }
 }
-if (args.serve) await serve(args)
-else { const result = collect(args.dirs); printTeams(result.teams, result.stale) }
+
+export { readEvents, renderEvents }

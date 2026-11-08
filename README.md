@@ -37,6 +37,11 @@
   一键写入：`node bin/role-preset.mjs delivery`（或注册后的 `dsh-role-preset delivery`）；单角色覆盖 `dsh-role-preset delivery reviewer=xiaomi/mimo-v2.6-pro`；清除 `dsh-role-preset clear`。改动下一次团队委派即生效（settings 每次委派热读）；写前自动备份。
 - **兼容保留的旧名**（故意不改，避免静默丢失已配置的路由）：用户设置文件 `~/.dsh/subagent-route-pin.json` 与环境变量 `DSH_ROUTE_PIN_*` 沿用旧名；插件本身、探针记录、页面均已改名
 
+## 配套文档
+
+- [与本机其他 DSH 插件的搭配说明](docs/integrations.md)：14 条已装插件的组合用法与冲突注意（路由与模型通道类 / 团队协作与观测类 / 技能与记忆类 / 平台与鉴权类，附快速索引表）。
+- [DeepSeek 官方 SuperAgent 兼容性调研](docs/research/superagent-compatibility.md)：官方 `dsh-superagent-prototype` 与本插件的共存结论——子代理可直接复用、Session 自身模型需指车道、脱离 DSH/Cordis 则不可用，附来源清单。
+
 ## 安装
 
 ```bash

@@ -72,7 +72,12 @@ window.__ModuleLoader__.load({
       stepsNamePlaceholder: '步骤名，中英文均可（如 research / 调研）',
       stepsRemove: '移除',
       stepsHint:
-        '像天枢的模型分工：给每个步骤配一个模型，然后把目标拆成多个串行子委派，委派时在 label 末尾加 #步骤名（如 调研报告#research），该步即走对应路由。优先级：逐专家 > 团队角色 > 步骤 > 主路由。',
+        '每步一个模型：把目标拆成多个串行子委派，每个步骤单独配置模型，委派时在 label 末尾加 #步骤名（如 调研报告#research），该步即走对应路由。优先级：逐专家 > 团队角色 > 步骤 > 主路由。',
+      stepsIssueName: '步骤名不能为空',
+      stepsIssueRoute: '提供商与模型都要选择',
+      stepsIssueDuplicate: '步骤名重复',
+      stepsIssueMissingModel: '模型不在当前目录',
+      stepsFixCount: '{count} 个步骤需要修正',
       failoverLabel: '故障切换路由（可选）',
       failoverHint:
         '被钉住的子代理在运行中撞上额度耗尽、鉴权失效、适配器消失等车道级故障时，其后续请求会被改写到这条备用路由（仅切换一次）。留空 = 关闭。与「团队模式注入」共用下面两个下拉的选择。',
@@ -81,6 +86,15 @@ window.__ModuleLoader__.load({
       rolesHint:
         'Agent Teams 成员按其团队角色（实现者/验证者/审查者等，来自团队状态文件）套用对应路由，优先级高于上面的主路由。编辑 ~/.dsh/subagent-route-pin.json 的 roles 字段后下一次团队委派即生效；dsh-role-preset delivery 可一键写入三车道预设。',
       driftLabel: '当前生效路由',
+      lastRunLabel: '最近一次委派',
+      lastRunModel: '模型',
+      lastRunStep: '步骤',
+      lastRunExpert: '专家',
+      lastRunSkills: '技能',
+      lastRunNone: '尚无委派记录。',
+      lastRunPending: '正在读取委派记录…',
+      lastRunUnavailable: '读取委派记录失败。',
+      listSep: '、',
       hint:
         '需要 API Key 的提供方请到 设置 → 模型 里配置，随后会出现在这里。个别专家单独指定模型：编辑 ~/.dsh/subagent-route-pin.json 的 experts 字段（可选）。'
     }
@@ -122,7 +136,12 @@ window.__ModuleLoader__.load({
       stepsNamePlaceholder: 'step name (e.g. research)',
       stepsRemove: 'Remove',
       stepsHint:
-        'Like the Tianshu model division: give each step its own model, then split the goal into serial sub-delegations labelled with #step at the end of the label (e.g. 调研报告#research). Priority: experts > roles > steps > main route.',
+        'One model per step: split the goal into serial sub-delegations, each step configured with its own model, labelled with #step at the end of the label (e.g. 调研报告#research). Priority: experts > roles > steps > main route.',
+      stepsIssueName: 'Step name cannot be empty',
+      stepsIssueRoute: 'Pick both provider and model',
+      stepsIssueDuplicate: 'Duplicate step name',
+      stepsIssueMissingModel: 'Model is not in the current catalog',
+      stepsFixCount: '{count} step(s) need fixing',
       failoverLabel: 'Failover route (optional)',
       failoverHint:
         'When a pinned child hits a lane failure mid-flight (quota drained, auth revoked, adapter gone), its next requests are rewritten to this backup route (once). Leave empty to disable. Shares the two dropdowns below with team injection.',
@@ -131,6 +150,15 @@ window.__ModuleLoader__.load({
       rolesHint:
         'Agent-Teams members are routed by their durable team role (实现者/验证者/审查者 from the team state file); roles outrank the main route above. Edit the roles field of ~/.dsh/subagent-route-pin.json and the next team delegation picks it up; dsh-role-preset delivery writes the three-lane preset in one shot.',
       driftLabel: 'Effective route',
+      lastRunLabel: 'Last delegation',
+      lastRunModel: 'Model',
+      lastRunStep: 'Step',
+      lastRunExpert: 'Expert',
+      lastRunSkills: 'Skills',
+      lastRunNone: 'No delegation recorded yet.',
+      lastRunPending: 'Loading the delegation record…',
+      lastRunUnavailable: 'Could not read the delegation record.',
+      listSep: ', ',
       hint:
         'Providers that need an API key are configured in Settings → Models and then appear here. Per-expert overrides: edit the experts field of ~/.dsh/subagent-route-pin.json (optional).'
     }
@@ -189,6 +217,36 @@ window.__ModuleLoader__.load({
           listeners.add(listener)
           return () => listeners.delete(listener)
         }
+      }
+    }
+
+    /**
+     * Newest run record (model / step / expert / skills), fetched over the
+     * host's same-origin `/delegation-hub/last-run` route. The browser cannot
+     * read files and the host exposes no file-reading RPC, so that route is
+     * the only way here; when it is absent (older host, route gated) the card
+     * renders one status line instead of inventing data.
+     */
+    const lastRunStore = createStore({ status: 'idle', record: null })
+
+    async function loadLastRun() {
+      if (typeof fetch !== 'function') {
+        lastRunStore.set({ status: 'unavailable', record: null })
+        return
+      }
+      try {
+        const response = await fetch('/delegation-hub/last-run')
+        if (response === null || typeof response !== 'object' || response.ok !== true) {
+          lastRunStore.set({ status: 'unavailable', record: null })
+          return
+        }
+        const body = await response.json()
+        lastRunStore.set({
+          status: 'ready',
+          record: body !== null && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length > 0 ? body : null
+        })
+      } catch {
+        lastRunStore.set({ status: 'unavailable', record: null })
       }
     }
 
@@ -608,6 +666,59 @@ window.__ModuleLoader__.load({
       return typeof t === 'function' ? t(key) : key
     }
 
+    /** Issue key → i18n key for one step-editor row. */
+    const STEP_ISSUE_LABELS = {
+      name: 'stepsIssueName',
+      route: 'stepsIssueRoute',
+      duplicate: 'stepsIssueDuplicate',
+      missingModel: 'stepsIssueMissingModel'
+    }
+
+    /**
+     * Live per-row issues of the step editor. Pure derivation from the draft
+     * rows plus the catalog on every render — nothing is written back into the
+     * draft or the store, so fixing a field clears the flag on the next frame
+     * without a save. An empty name, a missing provider/model, a duplicated
+     * name (trimmed, case-insensitive) and a model the ready catalog does not
+     * advertise each flag their row; a catalog that is not ready or advertises
+     * no groups never raises the last issue, to avoid false alarms while the
+     * list is still loading or empty.
+     */
+    function stepIssues(steps, catalog, rows) {
+      const list = Array.isArray(steps) ? steps : []
+      const nameCount = new Map()
+      for (const row of list) {
+        const key = String(row?.name ?? '').trim().toLowerCase()
+        if (key === '') continue
+        nameCount.set(key, (nameCount.get(key) ?? 0) + 1)
+      }
+      const catalogReady =
+        catalog !== null &&
+        typeof catalog === 'object' &&
+        catalog.status === 'ready' &&
+        Array.isArray(catalog.groups) &&
+        catalog.groups.length > 0 &&
+        Array.isArray(rows) &&
+        rows.length > 0
+      return list.map((row) => {
+        const issues = []
+        const name = String(row?.name ?? '').trim()
+        if (name === '') issues.push('name')
+        if (String(row?.provider ?? '') === '' || String(row?.model ?? '') === '') issues.push('route')
+        const nameKey = name.toLowerCase()
+        if (nameKey !== '' && (nameCount.get(nameKey) ?? 0) > 1) issues.push('duplicate')
+        if (
+          catalogReady &&
+          String(row?.provider ?? '') !== '' &&
+          String(row?.model ?? '') !== '' &&
+          !rows.some((candidate) => candidate.provider === row.provider && candidate.model === row.model)
+        ) {
+          issues.push('missingModel')
+        }
+        return issues
+      })
+    }
+
     const SELECT_STYLE = {
       width: '100%',
       padding: '6px 8px',
@@ -646,11 +757,65 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Model actually in force on a record; falls back to the record's route. */
+    function lastRunModelOf(record) {
+      if (record === null || typeof record !== 'object') return ''
+      if (typeof record.model === 'string' && record.model.trim() !== '') return record.model
+      const route = record.route
+      if (route !== null && typeof route === 'object' && typeof route.provider === 'string' && typeof route.model === 'string') {
+        return `${route.provider}/${route.model}`
+      }
+      return ''
+    }
+
+    /**
+     * Read-only info block under the engine line: which model / step / expert /
+     * skills the newest delegation actually ran with. Rendered from the
+     * last-run record only — no inputs, no actions, and the rest of the card's
+     * layout is untouched. Missing fields degrade to a single status line.
+     */
+    function lastRunBlock(t, lastRun) {
+      const record = lastRun !== null && typeof lastRun === 'object' && lastRun.record !== null && typeof lastRun.record === 'object'
+        ? lastRun.record
+        : null
+      const lines = []
+      if (lastRun !== null && typeof lastRun === 'object' && lastRun.status === 'ready' && record !== null) {
+        const model = lastRunModelOf(record)
+        lines.push(`${label(t, 'lastRunModel')}: ${model === '' ? '-' : model}`)
+        if (typeof record.step === 'string' && record.step.trim() !== '') lines.push(`${label(t, 'lastRunStep')}: ${record.step}`)
+        if (typeof record.expert === 'string' && record.expert.trim() !== '') lines.push(`${label(t, 'lastRunExpert')}: ${record.expert}`)
+        if (Array.isArray(record.skills)) {
+          const skills = record.skills.filter((skill) => typeof skill === 'string' && skill.trim() !== '')
+          if (skills.length > 0) lines.push(`${label(t, 'lastRunSkills')}: ${skills.join(label(t, 'listSep'))}`)
+        }
+      } else if (lastRun !== null && typeof lastRun === 'object' && lastRun.status === 'ready') lines.push(label(t, 'lastRunNone'))
+      else if (lastRun !== null && typeof lastRun === 'object' && lastRun.status === 'unavailable') lines.push(label(t, 'lastRunUnavailable'))
+      else lines.push(label(t, 'lastRunPending'))
+      return h(
+        'div',
+        {
+          'data-testid': 'last-run',
+          style: {
+            display: 'grid',
+            gap: '4px',
+            fontSize: '13px',
+            borderTop: '1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.25))',
+            paddingTop: '8px'
+          }
+        },
+        h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, label(t, 'lastRunLabel')),
+        ...lines.map((line) => h('span', {}, line))
+      )
+    }
+
     function DelegationHubCard(props) {
       const t = props.t
       const face = props.face
       const state = React.useSyncExternalStore(face.store.subscribe, face.store.get, face.store.get)
+      const lastRun = React.useSyncExternalStore(lastRunStore.subscribe, lastRunStore.get, lastRunStore.get)
       const rows = candidates(state.catalog.groups, state.saved)
+      const stepIssueList = stepIssues(state.draft.steps, state.catalog, rows)
+      const flaggedStepCount = stepIssueList.reduce((total, issues) => total + (issues.length > 0 ? 1 : 0), 0)
       const providers = []
       for (const row of rows) {
         if (!providers.some((entry) => entry.id === row.provider)) {
@@ -817,14 +982,36 @@ window.__ModuleLoader__.load({
         h(
           'p',
           { style: { margin: 0, fontSize: '13px', color: 'var(--dsw-alias-label-primary)', fontWeight: 600 } },
-          label(t, 'stepsLabel')
+          label(t, 'stepsLabel'),
+          flaggedStepCount > 0
+            ? h(
+                'span',
+                { style: { marginLeft: '8px', fontWeight: 400, color: 'var(--dsw-alias-warning, #f0b429)' } },
+                label(t, 'stepsFixCount').replace('{count}', String(flaggedStepCount))
+              )
+            : null
         ),
-        ...(state.draft.steps ?? []).map((row, index) =>
-          h(
+        ...(state.draft.steps ?? []).map((row, index) => {
+          const issues = stepIssueList[index] ?? []
+          const flagged = issues.length > 0
+          return h(
             'div',
             {
               key: `step-${index}`,
-              style: { display: 'grid', gap: '6px', padding: '6px 0', borderBottom: '1px solid var(--dsw-alias-border-l2)' }
+              ...(flagged ? { 'data-step-issues': issues.join(',') } : {}),
+              style: {
+                display: 'grid',
+                gap: '6px',
+                padding: '6px 0',
+                borderBottom: '1px solid var(--dsw-alias-border-l2)',
+                ...(flagged
+                  ? {
+                      background: 'var(--dsw-alias-bg-warning-subtle, rgba(245, 180, 0, 0.14))',
+                      borderLeft: '3px solid var(--dsw-alias-warning, #f0b429)',
+                      paddingLeft: '8px'
+                    }
+                  : {})
+              }
             },
             h(
               'div',
@@ -891,9 +1078,16 @@ window.__ModuleLoader__.load({
                 style: { ...INPUT_STYLE, minWidth: 0 },
                 onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
               })
-            )
+            ),
+            flagged
+              ? h(
+                  'span',
+                  { style: { fontSize: '12px', color: 'var(--dsw-alias-warning, #f0b429)' } },
+                  issues.map((issue) => label(t, STEP_ISSUE_LABELS[issue])).join(label(t, 'listSep'))
+                )
+              : null
           )
-        ),
+        }),
         h(
           'button',
           {
@@ -915,6 +1109,7 @@ window.__ModuleLoader__.load({
           { style: HINT_STYLE },
           `${label(t, 'engineLabel')}: ${engineText}`
         ),
+        lastRunBlock(t, lastRun),
         h(
           'div',
           { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
@@ -963,6 +1158,12 @@ window.__ModuleLoader__.load({
       const controller = createController(ctx)
       const face = { store: controller.store, actions: controller.actions }
       ctx.effect(() => () => controller.actions.dispose(), 'delegation-hub: form subscription')
+      // Fetch the newest run record once per mount (and again on remount, so a
+      // stale page never keeps showing a record from an earlier generation).
+      ctx.effect(() => {
+        void loadLastRun()
+        return () => {}
+      }, 'delegation-hub: last-run')
       const onRemote = (event, handler) => {
         const subscribe = ctx.remote?.$on
         return typeof subscribe === 'function' ? subscribe.call(ctx.remote, event, handler) : () => {}

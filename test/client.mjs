@@ -52,6 +52,21 @@ const React = {
   createElement: (type, props, ...children) => ({ type, props, children }),
   useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot()
 }
+// The panel reads the host's same-origin last-run route; the fake answers with
+// a recorded delegation (or fails on demand) so the info block can be asserted.
+const fetchCalls = []
+let fetchMode = 'record'
+const lastRunFixture = {
+  model: 'our-free-model/deepseek-v4.1-flash-free',
+  step: 'research',
+  expert: '代码审查工程师',
+  skills: ['aik_auto_memory_use', 'leanrea-win']
+}
+const fakeFetch = async (url) => {
+  fetchCalls.push(String(url))
+  if (fetchMode === 'missing') return { ok: false, status: 404 }
+  return { ok: true, json: async () => (fetchMode === 'empty' ? {} : lastRunFixture) }
+}
 const sandbox = {
   window: {
     __ModuleLoader__: {
@@ -64,7 +79,8 @@ const sandbox = {
     if (id === 'react') return React
     throw new Error(`unexpected require(${id})`)
   },
-  console
+  console,
+  fetch: fakeFetch
 }
 runInNewContext(readFileSync(new URL('../client.js', import.meta.url), 'utf8'), sandbox)
 
@@ -419,6 +435,93 @@ function makeContext(options = {}) {
     'empty-select save surfaces needCatalog instead of dying silently',
     snapshot().needCatalog === true && state.mutations.length === 0,
     JSON.stringify({ needCatalog: snapshot().needCatalog, mutations: state.mutations.length })
+  )
+}
+
+// --- last-run info block: the card shows the effective delegation ---------
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  check(
+    'panel fetches the last-run record on apply',
+    fetchCalls.includes('/delegation-hub/last-run'),
+    JSON.stringify(fetchCalls)
+  )
+  const page = state.registered[0].component({})
+  const rendered = JSON.stringify(page.type(page.props))
+  check(
+    'panel shows the effective model of the last delegation',
+    rendered.includes('our-free-model/deepseek-v4.1-flash-free'),
+    rendered.slice(0, 600)
+  )
+  check(
+    'panel shows step/expert/skills of the last delegation',
+    rendered.includes('research') &&
+      rendered.includes('代码审查工程师') &&
+      rendered.includes('aik_auto_memory_use、leanrea-win'),
+    rendered.slice(0, 600)
+  )
+  // A missing record (404) degrades to explanatory copy, never a crash.
+  fetchMode = 'missing'
+  const next = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(next.ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  const nextPage = next.state.registered[0].component({})
+  const nextRendered = JSON.stringify(nextPage.type(nextPage.props))
+  check(
+    'panel explains a missing last-run record instead of crashing',
+    nextRendered.includes('读取委派记录失败') && !nextRendered.includes('our-free-model/deepseek-v4.1-flash-free'),
+    nextRendered.slice(0, 600)
+  )
+  fetchMode = 'record'
+}
+
+// --- step rows flag live issues and clear them on the fix (no save) ------
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  await new Promise((resolve) => setImmediate(resolve))
+  const render = () => {
+    const page = state.registered[0].component({})
+    return JSON.stringify(page.type(page.props))
+  }
+  // Row 1 is brand new: empty name and no provider/model yet.
+  face.actions.addStep()
+  let rendered = render()
+  check(
+    'incomplete step row is flagged yellow with a reason in the rendered output',
+    rendered.includes('data-step-issues') &&
+      rendered.includes('rgba(245, 180, 0, 0.14)') &&
+      rendered.includes('步骤名不能为空') &&
+      rendered.includes('提供商与模型都要选择'),
+    rendered.slice(0, 900)
+  )
+  check(
+    'flagged rows raise a fix count next to the steps label',
+    rendered.includes('1 个步骤需要修正'),
+    rendered.slice(0, 900)
+  )
+  // Fixing the fields clears the flag on the next render — no save involved.
+  face.actions.setStep(0, { name: 'research', provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' })
+  rendered = render()
+  check(
+    'fixing the fields clears the flag without saving',
+    !rendered.includes('data-step-issues') && !rendered.includes('1 个步骤需要修正'),
+    rendered.slice(0, 900)
+  )
+  // A duplicated name (trimmed, case-insensitive) and a model the ready
+  // catalog does not advertise flag their row with the matching reason.
+  face.actions.addStep()
+  face.actions.setStep(1, { name: ' research ', provider: 'our-free-model', model: 'not-in-catalog' })
+  rendered = render()
+  check(
+    'duplicate name and off-catalog model flag the row with reasons',
+    rendered.includes('步骤名重复') &&
+      rendered.includes('模型不在当前目录') &&
+      rendered.includes('2 个步骤需要修正'),
+    rendered.slice(0, 900)
   )
 }
 

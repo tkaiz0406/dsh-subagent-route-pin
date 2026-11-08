@@ -114,6 +114,10 @@ const DEFAULT_READINESS_PATH = join(homedir(), '.dsh', 'delegation-hub.ready.jso
  * which is the question a user asks after the model failed.
  */
 const RUN_RECORD_NAME = 'delegation-hub.last-run.json'
+// Same-origin read route the Settings page uses to fetch the newest run record.
+// The browser has no file access and the host exposes no file-reading RPC, so a
+// named WebRoute is the only host-to-page surface for it.
+const LAST_RUN_ROUTE = '/delegation-hub/last-run'
 // Append-only delegation event stream: one JSON object per line. Tree views,
 // captain reports and evidence anchors read this instead of the single-slot
 // last-run file, because overwriting would drop every earlier delegation.
@@ -547,6 +551,42 @@ function stepDirectivePrefix(stepKey, lane) {
   }
 }
 
+/**
+ * Attribution carried by every run record: the route actually in force plus the
+ * step / expert / skills the label resolved through. Every field is best-effort
+ * and omitted when absent, so records written before this existed still parse
+ * and readers degrade field-by-field instead of breaking on a missing key.
+ *
+ * @param route - the route that ran. For a failover record this is the
+ *   switched-to route, which is the one the child's later requests use.
+ * @param picked - the pick result carrying `stepKey`/`lane` when the label
+ *   resolved through a step lane; `undefined` when nothing matched.
+ * @returns {{model?: string, step?: string, expert?: string, skills?: string[]}}
+ */
+function runAttribution(route, picked) {
+  const out = {}
+  try {
+    if (route !== null && typeof route === 'object' && typeof route.provider === 'string' && typeof route.model === 'string') {
+      out.model = `${route.provider}/${route.model}`
+    }
+    const pick = picked !== null && typeof picked === 'object' ? picked : undefined
+    if (pick !== undefined && typeof pick.stepKey === 'string' && pick.stepKey.trim() !== '') out.step = pick.stepKey.trim()
+    const lane = pick !== undefined && pick.lane !== null && typeof pick.lane === 'object' ? pick.lane : undefined
+    if (lane !== undefined) {
+      if (typeof lane.expert === 'string' && lane.expert.trim() !== '') out.expert = lane.expert.trim()
+      if (Array.isArray(lane.skills)) {
+        const skills = lane.skills
+          .filter((skill) => typeof skill === 'string' && skill.trim() !== '')
+          .map((skill) => skill.trim())
+        if (skills.length > 0) out.skills = skills
+      }
+    }
+  } catch {
+    /* attribution is advisory; a malformed pick must never break a record */
+  }
+  return out
+}
+
 /** Read one step lane (route + expert + skills) from the merged steps map. */
 function stepLaneOf(stepsMap, stepKey) {
   if (stepsMap === undefined || stepsMap === null) return undefined
@@ -950,7 +990,7 @@ class RoutePinProvider {
     )
     try {
       const handle = await base.start({ ...request, agentOptions })
-      this.recordRun({ label, route, outcome: 'pinned' })
+      this.recordRun({ label, route, outcome: 'pinned', ...runAttribution(route, picked) })
       return handle
     } catch (error) {
       // The pinned route is the one most likely to run dry (a free lane), so a
@@ -959,7 +999,7 @@ class RoutePinProvider {
       const inherited = request.agentOptions
       const sameRoute = inherited !== undefined && inherited.provider === route.provider && inherited.model === route.model
       const canRetry = config.fallback !== false && config.onPinFailure === 'inherit' && !sameRoute
-      this.recordRun({ label, route, outcome: 'failed', reason: describeError(error) })
+      this.recordRun({ label, route, outcome: 'failed', reason: describeError(error), ...runAttribution(route, picked) })
       if (!canRetry) {
         // Loud by default. The user picked this route on purpose; running the child
         // on some other model without saying so is the exact failure this plugin
@@ -1255,7 +1295,14 @@ class TeamInjectionAdapter {
                 }
               }
             }
-            pinned.recordRun({ label: spec.label, route: picked.route, outcome: 'pinned', channel: 'team', source: picked.source })
+            pinned.recordRun({
+              label: spec.label,
+              route: picked.route,
+              outcome: 'pinned',
+              channel: 'team',
+              source: picked.source,
+              ...runAttribution(picked.route, picked)
+            })
             ctx.logger.info(
               `${PLUGIN}: team member label=${JSON.stringify(spec.label ?? null)} -> ` +
                 `${routeKey(picked.route)}${picked.route.reasoningEffort === undefined ? '' : ` effort=${picked.route.reasoningEffort}`} (${picked.source})`
@@ -1287,7 +1334,14 @@ class TeamInjectionAdapter {
             typeof started === 'object' &&
             typeof started.childId === 'string'
           ) {
-            slot.adapter.armFailover(started.childId, { provider: failover.provider, model: failover.model }, spec.label, pinnedInstance?.recordRun.bind(pinnedInstance), request.parent)
+            slot.adapter.armFailover(
+              started.childId,
+              { provider: failover.provider, model: failover.model },
+              spec.label,
+              pinnedInstance?.recordRun.bind(pinnedInstance),
+              request.parent,
+              injected
+            )
           }
         } catch (failoverError) {
           ctx.logger.warn(`${PLUGIN}: failover watch skipped: ${describeError(failoverError)}`)
@@ -1309,7 +1363,14 @@ class TeamInjectionAdapter {
         // throw away Agent Teams' own member route.
         if (original === undefined) delete request.agentOptions
         else request.agentOptions = original
-        pinnedInstance?.recordRun({ label: spec.label, route: injected.route, outcome: 'failed', reason: describeError(error), channel: 'team' })
+        pinnedInstance?.recordRun({
+          label: spec.label,
+          route: injected.route,
+          outcome: 'failed',
+          reason: describeError(error),
+          channel: 'team',
+          ...runAttribution(injected.route, injected)
+        })
         ctx.logger.warn(
           `${PLUGIN}: team member ${JSON.stringify(spec.label ?? null)} failed to start on ${routeKey(injected.route)} ` +
             `(${describeError(error)}); retrying on the ${original === undefined ? 'inherited' : 'requested'} route`
@@ -1403,8 +1464,10 @@ class TeamInjectionAdapter {
    * @param childId - the started child's session id.
    * @param route - the failover route from the config row.
    * @param label - the delegation label for log lines.
+   * @param attribution - the pick that fed this child (step/expert/skills), so
+   *   the failover record keeps the lane the delegation was pinned to.
    */
-  armFailover(childId, route, label, recordRun, parentAgent) {
+  armFailover(childId, route, label, recordRun, parentAgent, attribution) {
     const adapter = this
     const agents = adapter.ctx?.agents
     if (agents === undefined || agents === null || typeof agents.get !== 'function') return
@@ -1436,7 +1499,7 @@ class TeamInjectionAdapter {
           `${PLUGIN}: member ${JSON.stringify(label ?? null)} failed with ${code}; ` +
             `switching its next requests to the failover route ${routeText}`
         )
-        recordRun?.({ label, route, outcome: 'failover', reason: code, channel: 'team' })
+        recordRun?.({ label, route, outcome: 'failover', reason: code, channel: 'team', ...runAttribution(route, attribution) })
         const ref = teamRefFromLabel(label, parentAgent)
         if (ref !== undefined) {
           reportToCaptain(
@@ -1800,6 +1863,55 @@ function applyInner(ctx, config = {}) {
     } catch (error) {
       ctx.logger.warn(`${PLUGIN}: cannot scope the team hook disposer: ${describeError(error)}`)
     }
+  }
+  // The Settings page shows the newest run record (model / step / expert /
+  // skills) by fetching it over a same-origin route: the browser cannot read
+  // files and the host exposes no file-reading RPC, so this named WebRoute is
+  // the only host-to-page surface for it. Best-effort on purpose — a build
+  // without webServer, or a service gate that refuses the read, costs the page
+  // its info block and must never cost the plugin its mount.
+  try {
+    const webServer = ctx.webServer
+    if (webServer !== undefined && webServer !== null && typeof webServer.register === 'function') {
+      const disposeRoute = webServer.register({
+        kind: 'exact',
+        path: LAST_RUN_ROUTE,
+        handler: (_req, res) => {
+          let body = '{}'
+          try {
+            const recordText = readFileSync(join(dirname(readinessPath), RUN_RECORD_NAME), 'utf8')
+            // A torn or non-object record is served as "no record" rather than
+            // as broken JSON: the page renders the same empty state either way.
+            const parsed = JSON.parse(recordText)
+            if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) body = recordText
+          } catch {
+            /* missing or torn record -> {} */
+          }
+          res.statusCode = 200
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(body)
+        }
+      })
+      if (typeof disposeRoute === 'function') {
+        try {
+          ctx.effect(
+            () => () => {
+              try {
+                disposeRoute()
+              } catch {
+                /* a dead route must not break teardown */
+              }
+            },
+            `${PLUGIN}: last-run route`
+          )
+        } catch {
+          /* no effect scope in this build: the route lives with the process */
+        }
+      }
+    }
+  } catch (error) {
+    ctx.logger.warn(`${PLUGIN}: last-run route not registered: ${describeError(error)}`)
   }
   return { mounted: true }
 }
