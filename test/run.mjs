@@ -2322,8 +2322,13 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     legacy.includes('old') && legacy.includes('<td>-</td>') && renderEvents([]) === '',
     legacy.slice(0, 600)
   )
-  // Drift observation: the readiness record states whether the effective route
-  // equals the pinned row. An experts override makes the drift visible.
+  // Drift observation: `drift` is a MOUNT-TIME snapshot comparing the effective
+  // route with the pinned config row. Both are `provider/model` strings, so the
+  // comparison is a plain string equality, and the verdict is null by
+  // construction: with a row, `route` and `configRow` are the same routeKey();
+  // without one, `configRow` is absent and there is no baseline. Per-delegation
+  // deviations (experts/roles/steps outranking the row) are recorded on the
+  // event stream's `source` field instead, which a mount-time record cannot see.
   writeFileSync(
     settingsPath,
     JSON.stringify({ experts: { anything: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } } }),
@@ -2336,14 +2341,33 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
     driftReady.drift === null,
     JSON.stringify(driftReady.drift)
   )
-  // Simulate a drift verdict by reading effectiveRoute with a settings override.
+  // The pinned row is the only thing this record can compare against, so the
+  // two fields must be literally the same string. This assertion is what pins
+  // the null verdict above to a reason instead of leaving it unexplained: if
+  // the record ever starts carrying two different shapes (an object on one
+  // side, a string on the other), the equality below breaks.
+  check(
+    'the pinned row equals the effective route, which is why drift is null',
+    typeof driftReady.route === 'string' &&
+      driftReady.route === driftReady.configRow &&
+      driftReady.route === 'deepseek-account/deepseek-flash',
+    JSON.stringify({ route: driftReady.route, configRow: driftReady.configRow })
+  )
+  // An experts override cannot move the mount-time verdict: it only applies
+  // when a delegation actually resolves through that tier.
+  check(
+    'an experts override does not move the mount-time drift verdict',
+    driftReady.routeSource === 'config row' && driftReady.drift === null,
+    JSON.stringify({ routeSource: driftReady.routeSource, drift: driftReady.drift })
+  )
   writeFileSync(
     settingsPath,
     JSON.stringify({ default: { provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' } }),
     'utf8'
   )
-  // effectiveRoute prefers the config row; a drift can only appear when the
-  // row is absent, so remove it by building a rowless harness.
+  // effectiveRoute prefers the config row, so a rowless harness is the only way
+  // to reach the settings-default branch — and it still has no configRow to
+  // compare against, hence another null.
   const rowless = makeHarness({})
   const rowlessReady = JSON.parse(readFileSync(readinessPath, 'utf8'))
   check(

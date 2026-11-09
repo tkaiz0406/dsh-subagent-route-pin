@@ -80,7 +80,7 @@ window.__ModuleLoader__.load({
       stepsFixCount: '{count} 个步骤需要修正',
       failoverLabel: '故障切换路由（可选）',
       failoverHint:
-        '被钉住的子代理在运行中撞上额度耗尽、鉴权失效、适配器消失等车道级故障时，其后续请求会被改写到这条备用路由（仅切换一次）。留空 = 关闭。与「团队模式注入」共用下面两个下拉的选择。',
+        '仅对 Agent-Teams 团队成员生效：成员在运行中撞上额度耗尽、鉴权失效、适配器消失等车道级故障时，其后续请求会被改写到这条备用路由（仅切换一次）。单发子代理与专家团专家不走这条接缝，不受 failoverRoute 影响。留空 = 关闭。与「团队模式注入」共用下面两个下拉的选择。',
       failoverToggle: '启用故障切换',
       rolesLabel: '按角色路由（roles）',
       rolesHint:
@@ -91,6 +91,9 @@ window.__ModuleLoader__.load({
       lastRunStep: '步骤',
       lastRunExpert: '专家',
       lastRunSkills: '技能',
+      lastRunOutcome: '结果',
+      lastRunReason: '原因',
+      lastRunAt: '时间',
       lastRunNone: '尚无委派记录。',
       lastRunPending: '正在读取委派记录…',
       lastRunUnavailable: '读取委派记录失败。',
@@ -144,7 +147,7 @@ window.__ModuleLoader__.load({
       stepsFixCount: '{count} step(s) need fixing',
       failoverLabel: 'Failover route (optional)',
       failoverHint:
-        'When a pinned child hits a lane failure mid-flight (quota drained, auth revoked, adapter gone), its next requests are rewritten to this backup route (once). Leave empty to disable. Shares the two dropdowns below with team injection.',
+        'Agent-Teams members only: when a member hits a lane failure mid-flight (quota drained, auth revoked, adapter gone), its next requests are rewritten to this backup route (once). One-shot subagents and agency experts do not pass through that seam and are unaffected. Leave empty to disable. Shares the two dropdowns below with team injection.',
       failoverToggle: 'Enable failover',
       rolesLabel: 'Role routes (roles)',
       rolesHint:
@@ -155,6 +158,9 @@ window.__ModuleLoader__.load({
       lastRunStep: 'Step',
       lastRunExpert: 'Expert',
       lastRunSkills: 'Skills',
+      lastRunOutcome: 'Outcome',
+      lastRunReason: 'Reason',
+      lastRunAt: 'At',
       lastRunNone: 'No delegation recorded yet.',
       lastRunPending: 'Loading the delegation record…',
       lastRunUnavailable: 'Could not read the delegation record.',
@@ -357,7 +363,10 @@ window.__ModuleLoader__.load({
         conflict: false,
         landed: false,
         precheck: null,
-        needCatalog: false
+        needCatalog: false,
+        // Set by save() when the step editor still flags rows. A blocked save
+        // must say why instead of leaving the status line on 「没有改动」.
+        stepBlocked: false
       })
       let catalogGeneration = 0
       let disposed = false
@@ -476,13 +485,14 @@ window.__ModuleLoader__.load({
             conflict: false,
             failed: false,
             landed: false,
-            precheck: null
+            precheck: null,
+            stepBlocked: false
           })
         },
         setStep(index, patch) {
           const state = store.get()
           const steps = state.draft.steps.map((row, i) => (i === index ? { ...row, ...patch } : row))
-          publish({ draft: { ...state.draft, steps }, touched: true, conflict: false, failed: false, landed: false, precheck: null })
+          publish({ draft: { ...state.draft, steps }, touched: true, conflict: false, failed: false, landed: false, precheck: null, stepBlocked: false })
         },
         removeStep(index) {
           const state = store.get()
@@ -492,7 +502,8 @@ window.__ModuleLoader__.load({
             conflict: false,
             failed: false,
             landed: false,
-            precheck: null
+            precheck: null,
+            stepBlocked: false
           })
         },
         setFailover(provider, model) {
@@ -523,7 +534,19 @@ window.__ModuleLoader__.load({
         retryCatalog() {
           void loadCatalog()
         },
-        async save() {
+        /**
+         * Persist the row. `flaggedStepCount` is the count the card already
+         * derived from `stepIssues` for this frame — it is passed in so this
+         * action never recomputes the criteria.
+         *
+         * A flagged step row used to be dropped by the serialization loop below
+         * while the card still reported 「已保存」: the row was yellow on screen
+         * and silently absent from stepsJson. The save is now refused with the
+         * same reason text the card shows, and the whole mutate is skipped —
+         * persisting the other fields while dropping a row would still be a
+         * silent data loss.
+         */
+        async save(flaggedStepCount = 0) {
           const state = store.get()
           const snap = snapshot()
           if (saving || scope === undefined || snap === undefined || snap.status !== 'ready' || snap.writable !== true) return
@@ -531,7 +554,11 @@ window.__ModuleLoader__.load({
           if (draft.provider === '' || draft.model === '') {
             // Empty selects used to silently swallow the click: the user saw a
             // dead button. Surface the reason instead.
-            publish({ needCatalog: true, failed: false, conflict: false, landed: false })
+            publish({ needCatalog: true, failed: false, conflict: false, landed: false, stepBlocked: false })
+            return
+          }
+          if (flaggedStepCount > 0) {
+            publish({ stepBlocked: true, failed: false, conflict: false, landed: false, needCatalog: false })
             return
           }
           // Catalog preflight (P1-④): a model the catalog does not advertise is
@@ -557,9 +584,9 @@ window.__ModuleLoader__.load({
               return
             }
           }
-          publish({ precheck: null })
+          publish({ precheck: null, stepBlocked: false })
           saving = true
-          publish({ saving: true, failed: false, conflict: false, landed: false, needCatalog: false })
+          publish({ saving: true, failed: false, conflict: false, landed: false, needCatalog: false, stepBlocked: false })
           try {
             const failoverOps =
               draft.failoverProvider !== '' && draft.failoverModel !== ''
@@ -738,17 +765,11 @@ window.__ModuleLoader__.load({
       fontSize: '13px'
     }
     const HINT_STYLE = { margin: 0, fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' }
-    const INPUT_STYLE = {
-      width: '100%',
-      padding: '6px 8px',
-      borderRadius: '8px',
-      border: '1px solid var(--dsw-alias-border-l2)',
-      background: 'var(--dsw-alias-bg-module-platform)',
-      color: 'var(--dsw-alias-label-primary)',
-      fontSize: '13px'
-    }
+    // A text input and a select share the same box; keep one object so the two
+    // never drift apart on a future style tweak.
+    const INPUT_STYLE = SELECT_STYLE
 
-    function fieldRow(t, text, control) {
+    function fieldRow(text, control) {
       return h(
         'label',
         { style: { display: 'grid', gap: '6px', fontSize: '13px' } },
@@ -782,6 +803,23 @@ window.__ModuleLoader__.load({
       if (lastRun !== null && typeof lastRun === 'object' && lastRun.status === 'ready' && record !== null) {
         const model = lastRunModelOf(record)
         lines.push(`${label(t, 'lastRunModel')}: ${model === '' ? '-' : model}`)
+        // The host records why the delegation ended the way it did
+        // (pinned/failed/failover + reason). A failed or switched run used to
+        // read exactly like a successful one here, which is the one question a
+        // user asks after a model error.
+        const outcome = typeof record.outcome === 'string' ? record.outcome.trim() : ''
+        const reason = typeof record.reason === 'string' ? record.reason.trim() : ''
+        if (outcome !== '' && outcome !== 'pinned') {
+          const detail = reason === ''
+            ? `${label(t, 'lastRunOutcome')}: ${outcome}`
+            : `${label(t, 'lastRunOutcome')}: ${outcome} · ${label(t, 'lastRunReason')}: ${reason}`
+          lines.push(detail)
+        }
+        if (typeof record.at === 'string' && record.at.trim() !== '') {
+          const stamp = Date.parse(record.at)
+          const shown = Number.isNaN(stamp) ? record.at.trim() : new Date(stamp).toLocaleString()
+          lines.push(`${label(t, 'lastRunAt')}: ${shown}`)
+        }
         if (typeof record.step === 'string' && record.step.trim() !== '') lines.push(`${label(t, 'lastRunStep')}: ${record.step}`)
         if (typeof record.expert === 'string' && record.expert.trim() !== '') lines.push(`${label(t, 'lastRunExpert')}: ${record.expert}`)
         if (Array.isArray(record.skills)) {
@@ -835,6 +873,7 @@ window.__ModuleLoader__.load({
           .replace('{provider}', state.draft.provider)
           .replace('{model}', state.draft.model)
       else if (state.needCatalog) status = label(t, 'needCatalog')
+      else if (state.stepBlocked) status = label(t, 'stepsFixCount').replace('{count}', String(flaggedStepCount))
       else if (state.failed) status = label(t, 'saveFailed')
       else if (state.saving) status = label(t, 'saving')
       else if (state.landed) status = label(t, 'saved')
@@ -856,7 +895,6 @@ window.__ModuleLoader__.load({
           label(t, 'description')
         ),
         fieldRow(
-          t,
           label(t, 'provider'),
           h(
             'select',
@@ -871,7 +909,6 @@ window.__ModuleLoader__.load({
           )
         ),
         fieldRow(
-          t,
           label(t, 'model'),
           h(
             'select',
@@ -892,7 +929,6 @@ window.__ModuleLoader__.load({
           )
         ),
         fieldRow(
-          t,
           label(t, 'effort'),
           h(
             'select',
@@ -939,7 +975,6 @@ window.__ModuleLoader__.load({
         state.draft.failoverProvider !== '' || state.draft.failoverModel !== ''
           ? h('div', { style: { display: 'grid', gap: '8px' } },
               fieldRow(
-                t,
                 `${label(t, 'failoverLabel')} · ${label(t, 'provider')}`,
                 h(
                   'select',
@@ -954,7 +989,6 @@ window.__ModuleLoader__.load({
                 )
               ),
               fieldRow(
-                t,
                 `${label(t, 'failoverLabel')} · ${label(t, 'model')}`,
                 h(
                   'select',
@@ -1119,7 +1153,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               style: BUTTON_STYLE,
               disabled: !editable || !dirty,
-              onClick: () => void face.actions.save()
+              onClick: () => void face.actions.save(flaggedStepCount)
             },
             state.saving ? label(t, 'saving') : label(t, 'save')
           ),

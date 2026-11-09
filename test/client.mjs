@@ -21,6 +21,26 @@ function check(label, condition, detail) {
   }
 }
 
+/**
+ * Find the save button in a rendered element tree and return it.
+ *
+ * The fake React here returns plain `{ type, props, children }` nodes, so a
+ * depth-first walk is enough. The button is identified by its label text —
+ * the card renders `saving ? '保存中…' : '保存'` — so this helper must be called
+ * on a card that is not mid-save.
+ */
+function findSaveButton(node) {
+  if (node === null || typeof node !== 'object') return undefined
+  const children = Array.isArray(node.children) ? node.children : []
+  const text = children.filter((child) => typeof child === 'string').join('')
+  if (node.type === 'button' && text === '保存') return node
+  for (const child of children) {
+    const found = findSaveButton(child)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 /** Test-side mirror of the card's dirty rule (sameRoute + sameSteps). */
 function sameRouteLike(left, right) {
   const la = Array.isArray(left.steps) ? left.steps : []
@@ -56,7 +76,7 @@ const React = {
 // a recorded delegation (or fails on demand) so the info block can be asserted.
 const fetchCalls = []
 let fetchMode = 'record'
-const lastRunFixture = {
+let lastRunFixture = {
   model: 'our-free-model/deepseek-v4.1-flash-free',
   step: 'research',
   expert: '代码审查工程师',
@@ -477,6 +497,48 @@ function makeContext(options = {}) {
   fetchMode = 'record'
 }
 
+// --- last-run block renders the outcome, the reason and the timestamp -----
+// The host writes outcome/reason/at into the record; a failed or switched run
+// must not read exactly like a successful one.
+{
+  lastRunFixture = { model: 'our-free-model/deepseek-v4.1-flash-free', outcome: 'failed', reason: 'QUOTA', at: '2026-11-09T02:50:43.466Z' }
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  const page = state.registered[0].component({})
+  const rendered = JSON.stringify(page.type(page.props))
+  check(
+    'last-run block shows the failure outcome and its reason',
+    rendered.includes('结果: failed') && rendered.includes('原因: QUOTA'),
+    rendered.slice(0, 700)
+  )
+  check(
+    'last-run block shows when the delegation ran',
+    rendered.includes('时间: ') && rendered.includes('2026'),
+    rendered.slice(0, 700)
+  )
+  // A pinned run needs no extra line: the model line already says it worked.
+  lastRunFixture = { model: 'our-free-model/deepseek-v4.1-flash-free', outcome: 'pinned' }
+  const ok = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(ok.ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  const okPage = ok.state.registered[0].component({})
+  const okRendered = JSON.stringify(okPage.type(okPage.props))
+  check(
+    'a pinned run renders no failure line',
+    okRendered.includes('our-free-model/deepseek-v4.1-flash-free') &&
+      !okRendered.includes('failed') &&
+      !okRendered.includes('结果:'),
+    okRendered.slice(0, 700)
+  )
+  lastRunFixture = {
+    model: 'our-free-model/deepseek-v4.1-flash-free',
+    step: 'research',
+    expert: '代码审查工程师',
+    skills: ['aik_auto_memory_use', 'leanrea-win']
+  }
+}
+
 // --- step rows flag live issues and clear them on the fix (no save) ------
 {
   const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
@@ -522,6 +584,54 @@ function makeContext(options = {}) {
       rendered.includes('模型不在当前目录') &&
       rendered.includes('2 个步骤需要修正'),
     rendered.slice(0, 900)
+  )
+}
+
+// --- a flagged step row refuses the save instead of dropping it silently ---
+// The serialization loop skips rows with an empty name or a missing
+// provider/model. Before this guard the card still reported 「已保存」 and the
+// yellow row was simply absent from stepsJson.
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  face.actions.addStep()
+  const page = state.registered[0].component({})
+  const flagged = page.type(page.props)
+  // The card computes the flag count and hands it to the click handler.
+  const saveButton = findSaveButton(flagged)
+  check(
+    'the save button passes the live flag count to the action',
+    saveButton !== undefined && typeof saveButton.props.onClick === 'function',
+    JSON.stringify(flagged).slice(0, 400)
+  )
+  const before = state.mutations.length
+  await face.actions.save(1)
+  check(
+    'a flagged step row blocks the save (no mutate op is sent)',
+    state.mutations.length === before,
+    JSON.stringify({ before, after: state.mutations.length })
+  )
+  check(
+    'the blocked save explains itself instead of claiming success',
+    snapshot().stepBlocked === true && snapshot().landed === false,
+    JSON.stringify({ stepBlocked: snapshot().stepBlocked, landed: snapshot().landed, failed: snapshot().failed })
+  )
+  const blockedRender = JSON.stringify(page.type(page.props))
+  check(
+    'the blocked status line names the number of rows to fix',
+    blockedRender.includes('1 个步骤需要修正') && !blockedRender.includes('已保存'),
+    blockedRender.slice(-700)
+  )
+  // Fixing the row unblocks the very same action — the guard must not latch.
+  face.actions.setStep(0, { name: 'research', provider: 'our-free-model', model: 'deepseek-v4.1-flash-free' })
+  await face.actions.save(0)
+  check(
+    'a clean step editor saves normally (the guard does not over-block)',
+    state.mutations.length === before + 1 && snapshot().landed === true,
+    JSON.stringify({ mutations: state.mutations.length, landed: snapshot().landed, stepBlocked: snapshot().stepBlocked })
   )
 }
 

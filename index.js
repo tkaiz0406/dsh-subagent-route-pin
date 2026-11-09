@@ -431,20 +431,6 @@ function normalizeSettings(parsed) {
 }
 
 /**
- * Resolve the Agent-Teams role for a delegated member from its label.
- *
- * Team labels look like `agent-teams:<teamId>:<memberName>` ( MEMBER_LABEL_PREFIX
- * in @nanmicoder/dsh-agent-teams ). The member's role lives in the durable team
- * state file `<captain cwd>/.agent-teams/<teamId>/team.json` under
- * `members[].role`. Every failure — no team label, unreadable state, unknown
- * member, odd shapes — degrades to `undefined`, because a role is an optional
- * routing refinement and must never break a delegation.
- * @param label - the delegation label carried on the seam spec.
- * @param parentAgent - the delegating parent agent; its session cwd locates the
- *   team state directory.
- * @returns the lower-cased role string, or undefined when unknown.
- */
-/**
  * Parse a team member label into its identity: `agent-teams:<teamId>:<member>`
  * plus the captain's workspace cwd (from the delegating parent's session
  * header). Returns undefined for anything that is not a well-formed team
@@ -470,6 +456,20 @@ function teamRefFromLabel(label, parentAgent) {
   return { teamId, memberName, cwd }
 }
 
+/**
+ * Resolve the Agent-Teams role for a delegated member from its label.
+ *
+ * Team labels look like `agent-teams:<teamId>:<memberName>` ( MEMBER_LABEL_PREFIX
+ * in @nanmicoder/dsh-agent-teams ). The member's role lives in the durable team
+ * state file `<captain cwd>/.agent-teams/<teamId>/team.json` under
+ * `members[].role`. Every failure — no team label, unreadable state, unknown
+ * member, odd shapes — degrades to `undefined`, because a role is an optional
+ * routing refinement and must never break a delegation.
+ * @param label - the delegation label carried on the seam spec.
+ * @param parentAgent - the delegating parent agent; its session cwd locates the
+ *   team state directory.
+ * @returns the lower-cased role string, or undefined when unknown.
+ */
 function roleForLabel(label, parentAgent) {
   try {
     const ref = teamRefFromLabel(label, parentAgent)
@@ -549,6 +549,34 @@ function stepDirectivePrefix(stepKey, lane) {
   } catch {
     return ''
   }
+}
+
+/**
+ * Prepend the step directive to the child's first prompt text block, in place
+ * on the request object.
+ *
+ * The rewrite REBUILDS the prompt array instead of writing into the caller's
+ * text block: both call sites keep a shallow `{ ...request }` copy and a retry
+ * reuses the same prompt object, so an in-place prepend would stack a second
+ * directive on the retry. A block that already starts with the directive is
+ * left untouched, which makes the whole call idempotent.
+ *
+ * @param request - the seam request; `request.prompt` is replaced when it holds
+ *   a text block. Anything else (no prompt, no text block, no directive) is a
+ *   no-op.
+ * @param stepKey - the resolved step name, used to build the directive.
+ * @param lane - the step lane carrying `expert` / `skills`.
+ */
+function prependStepDirective(request, stepKey, lane) {
+  if (request === null || typeof request !== 'object') return
+  if (!Array.isArray(request.prompt)) return
+  const directive = stepDirectivePrefix(stepKey, lane)
+  if (directive === '') return
+  const idx = request.prompt.findIndex((block) => block !== null && typeof block === 'object' && block.type === 'text')
+  if (idx < 0) return
+  const block = request.prompt[idx]
+  const text = typeof block.text === 'string' && block.text.startsWith(directive) ? block.text : `${directive}${block.text ?? ''}`
+  request.prompt = request.prompt.map((b, i) => (i === idx ? { ...b, text } : b))
 }
 
 /**
@@ -712,7 +740,7 @@ class RoutePinProvider {
       return settings
     } catch (error) {
       ctx.logger.warn(
-        `${PLUGIN}: ignoring ${config.settingsPath}: ${error instanceof Error ? error.message : String(error)}`
+        `${PLUGIN}: ignoring ${config.settingsPath}: ${describeError(error)}`
       )
       return state.settings
     }
@@ -855,25 +883,13 @@ class RoutePinProvider {
       }
     } catch (error) {
       verified = false
-      ctx.logger.warn(`${PLUGIN}: route check skipped for ${key}: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`${PLUGIN}: route check skipped for ${key}: ${describeError(error)}`)
       problem = undefined
     }
     if (verified) state.checked.set(key, { at: now, problem })
     return problem
   }
 
-  /**
-   * Resolve + validate the route for one label.
-   *
-   * Returns `undefined` when no usable route exists and `strict` is off: the
-   * child then simply inherits the parent's route, which is exactly what a
-   * freshly installed plugin with no configuration should do. A missing route
-   * must never make a delegation fail — that would turn an optional feature into
-   * an outage on every machine that forgot one line of YAML.
-   *
-   * `soft: true` (team mode) additionally swallows a strict-mode throw, because a
-   * broken route must not take member creation down with it.
-   */
   /** Persist the outcome of one delegation; never throws. */
   recordRun(entry) {
     const { config } = this.options
@@ -899,6 +915,18 @@ class RoutePinProvider {
     }
   }
 
+  /**
+   * Resolve + validate the route for one label.
+   *
+   * Returns `undefined` when no usable route exists and `strict` is off: the
+   * child then simply inherits the parent's route, which is exactly what a
+   * freshly installed plugin with no configuration should do. A missing route
+   * must never make a delegation fail — that would turn an optional feature into
+   * an outage on every machine that forgot one line of YAML.
+   *
+   * `soft: true` (team mode) additionally swallows a strict-mode throw, because a
+   * broken route must not take member creation down with it.
+   */
   async pickRoute(label, soft = false) {
     const { ctx, config } = this.options
     const strict = config.strict === true
@@ -943,7 +971,7 @@ class RoutePinProvider {
       if (error.routeFailure === true && soft !== true) throw error
       if (strict && soft !== true) throw error
       ctx.logger.warn(
-        `${PLUGIN}: no usable route, the child inherits the parent model: ${error instanceof Error ? error.message : String(error)}`
+        `${PLUGIN}: no usable route, the child inherits the parent model: ${describeError(error)}`
       )
       return undefined
     }
@@ -969,21 +997,7 @@ class RoutePinProvider {
     // Step-directive: when this label resolved through a step lane that names
     // an expert and/or skills, prepend the advisory prefix to the child's
     // first prompt text block.
-    if (picked.stepKey !== undefined) {
-      const directive = stepDirectivePrefix(picked.stepKey, picked.lane)
-      if (directive !== '' && Array.isArray(request.prompt)) {
-        // Rebuild the array instead of writing into the caller's text block:
-        // `{ ...request }` above is a shallow copy and the retry below reuses the
-        // same prompt object, so an in-place prepend would stack a second
-        // directive on the inherited-route retry.
-        const idx = request.prompt.findIndex((block) => block !== null && typeof block === 'object' && block.type === 'text')
-        if (idx >= 0) {
-          const block = request.prompt[idx]
-          const text = typeof block.text === 'string' && block.text.startsWith(directive) ? block.text : `${directive}${block.text ?? ''}`
-          request.prompt = request.prompt.map((b, i) => (i === idx ? { ...b, text } : b))
-        }
-      }
-    }
+    if (picked.stepKey !== undefined) prependStepDirective(request, picked.stepKey, picked.lane)
     ctx.logger.info(
       `${PLUGIN}: label=${JSON.stringify(label ?? null)} -> ${routeKey(route)}` +
         `${route.reasoningEffort === undefined ? '' : ` effort=${route.reasoningEffort}`} (${source})`
@@ -1281,20 +1295,7 @@ class TeamInjectionAdapter {
             if (claimed) original = request.agentOptions
             request.agentOptions = agentOptions
             injected = picked
-            if (picked.stepKey !== undefined && request.prompt !== undefined && Array.isArray(request.prompt)) {
-              const directive = stepDirectivePrefix(picked.stepKey, picked.lane)
-              if (directive !== '') {
-                // Same non-mutating rewrite as the single-shot path: the start
-                // failure retry below re-calls the seam with this spec, and an
-                // in-place prepend would stack the directive twice.
-                const idx = request.prompt.findIndex((block) => block !== null && typeof block === 'object' && block.type === 'text')
-                if (idx >= 0) {
-                  const block = request.prompt[idx]
-                  const text = typeof block.text === 'string' && block.text.startsWith(directive) ? block.text : `${directive}${block.text ?? ''}`
-                  request.prompt = request.prompt.map((b, i) => (i === idx ? { ...b, text } : b))
-                }
-              }
-            }
+            if (picked.stepKey !== undefined) prependStepDirective(request, picked.stepKey, picked.lane)
             pinned.recordRun({
               label: spec.label,
               route: picked.route,
@@ -1538,11 +1539,6 @@ class TeamInjectionAdapter {
 }
 
 /**
- * Public read-only view of the team-injection capability. Callers that hold the
- * `ctx.subagents` service can ask whether team-mode routing is live — and which
- * seam carries it — instead of grepping the log.
- */
-/**
  * Read the delegation event stream. One JSON object per line; torn or
  * malformed lines (a crashed write, manual editing) are skipped, never thrown,
  * because the stream is observational evidence and must stay readable even
@@ -1569,6 +1565,11 @@ export function readEvents(eventsPath) {
   }
 }
 
+/**
+ * Public read-only view of the team-injection capability. Callers that hold the
+ * `ctx.subagents` service can ask whether team-mode routing is live — and which
+ * seam carries it — instead of grepping the log.
+ */
 export function teamInjectionCapabilities(service) {
   const slot = readHookSlot(service)
   if (slot === undefined) {
@@ -1776,7 +1777,7 @@ function applyInner(ctx, config = {}) {
     // because the extra provider only adds routes.
     ctx.logger.warn(
       `${PLUGIN}: provider "${normalized.providerName}" not registered ` +
-        `(${error instanceof Error ? error.message : String(error)}); ` +
+        `(${describeError(error)}); ` +
         `agency-agents routes through "${normalized.providerName}" keep using the existing instance`
     )
   }
@@ -1788,7 +1789,7 @@ function applyInner(ctx, config = {}) {
       ctx.effect(() => () => disposeProvider(), `${PLUGIN}: provider`)
     } catch (error) {
       ctx.logger.warn(
-        `${PLUGIN}: cannot scope the provider disposer: ${error instanceof Error ? error.message : String(error)}`
+        `${PLUGIN}: cannot scope the provider disposer: ${describeError(error)}`
       )
     }
   }
@@ -1835,15 +1836,21 @@ function applyInner(ctx, config = {}) {
     settingsDefault: effective.settingsDefault,
     experts: effective.experts,
     settingsDefaultShadowed: effective.shadowed === true,
-    // Drift observation: the effective route minus the pinned config row.
-    // `null` means the child runs on exactly the row the Settings page wrote;
-    // a route object means the row lost to a higher tier (experts/roles) or
-    // that no row is configured — both are intended behavior, but they must be
-    // visible in one glance instead of requiring a diff of two fields.
+    // Mount-time snapshot of "effective route vs. the pinned config row".
+    //
+    // Both fields come out of effectiveRoute() as `provider/model` strings, so
+    // this is a plain string comparison. It is null by construction, and that is
+    // the honest answer rather than a bug to paper over:
+    //   · with a config row, `route` and `configRow` are the same routeKey();
+    //   · without one, `configRow` is absent, so there is no baseline to differ
+    //     from.
+    // The interesting deviations happen per delegation (experts/roles/steps
+    // outranking the row), which a mount-time record cannot see. Read those from
+    // the `source` field of events.jsonl or last-run.json.
     drift:
       effective.route === undefined || effective.configRow === undefined
         ? null
-        : effective.route.provider === effective.configRow.provider && effective.route.model === effective.configRow.model
+        : effective.route === effective.configRow
           ? null
           : { pinned: effective.configRow, effective: effective.route, by: effective.source },
     fallback: normalized.fallback,
@@ -1864,54 +1871,67 @@ function applyInner(ctx, config = {}) {
       ctx.logger.warn(`${PLUGIN}: cannot scope the team hook disposer: ${describeError(error)}`)
     }
   }
-  // The Settings page shows the newest run record (model / step / expert /
-  // skills) by fetching it over a same-origin route: the browser cannot read
-  // files and the host exposes no file-reading RPC, so this named WebRoute is
-  // the only host-to-page surface for it. Best-effort on purpose — a build
-  // without webServer, or a service gate that refuses the read, costs the page
-  // its info block and must never cost the plugin its mount.
+  registerLastRunRoute(ctx, readinessPath)
+  return { mounted: true }
+}
+
+/**
+ * Publish the newest run record over a same-origin WebRoute.
+ *
+ * The Settings page shows the model / step / expert / skills of the last
+ * delegation by fetching `LAST_RUN_ROUTE`: the browser cannot read files and the
+ * host exposes no file-reading RPC, so a named WebRoute is the only
+ * host-to-page surface for it.
+ *
+ * Best-effort on purpose — a build without `webServer`, or a service gate that
+ * refuses the read, costs the page its info block and must never cost the
+ * plugin its mount. The route lives in its own effect scope so a remount does
+ * not leave a dead handler behind.
+ *
+ * @param ctx - the Cordis plugin context (needs `webServer`, `effect`, `logger`).
+ * @param readinessPath - the readiness record path; the run record is its
+ *   sibling (`RUN_RECORD_NAME` in the same directory).
+ */
+function registerLastRunRoute(ctx, readinessPath) {
   try {
     const webServer = ctx.webServer
-    if (webServer !== undefined && webServer !== null && typeof webServer.register === 'function') {
-      const disposeRoute = webServer.register({
-        kind: 'exact',
-        path: LAST_RUN_ROUTE,
-        handler: (_req, res) => {
-          let body = '{}'
-          try {
-            const recordText = readFileSync(join(dirname(readinessPath), RUN_RECORD_NAME), 'utf8')
-            // A torn or non-object record is served as "no record" rather than
-            // as broken JSON: the page renders the same empty state either way.
-            const parsed = JSON.parse(recordText)
-            if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) body = recordText
-          } catch {
-            /* missing or torn record -> {} */
-          }
-          res.statusCode = 200
-          res.setHeader('content-type', 'application/json; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
-          res.end(body)
-        }
-      })
-      if (typeof disposeRoute === 'function') {
+    if (webServer === undefined || webServer === null || typeof webServer.register !== 'function') return
+    const disposeRoute = webServer.register({
+      kind: 'exact',
+      path: LAST_RUN_ROUTE,
+      handler: (_req, res) => {
+        let body = '{}'
         try {
-          ctx.effect(
-            () => () => {
-              try {
-                disposeRoute()
-              } catch {
-                /* a dead route must not break teardown */
-              }
-            },
-            `${PLUGIN}: last-run route`
-          )
+          const recordText = readFileSync(join(dirname(readinessPath), RUN_RECORD_NAME), 'utf8')
+          // A torn or non-object record is served as "no record" rather than
+          // as broken JSON: the page renders the same empty state either way.
+          const parsed = JSON.parse(recordText)
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) body = recordText
         } catch {
-          /* no effect scope in this build: the route lives with the process */
+          /* missing or torn record -> {} */
         }
+        res.statusCode = 200
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(body)
       }
+    })
+    if (typeof disposeRoute !== 'function') return
+    try {
+      ctx.effect(
+        () => () => {
+          try {
+            disposeRoute()
+          } catch {
+            /* a dead route must not break teardown */
+          }
+        },
+        `${PLUGIN}: last-run route`
+      )
+    } catch {
+      /* no effect scope in this build: the route lives with the process */
     }
   } catch (error) {
     ctx.logger.warn(`${PLUGIN}: last-run route not registered: ${describeError(error)}`)
   }
-  return { mounted: true }
 }

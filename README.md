@@ -19,11 +19,11 @@
 - 每次委派的结果写进 `~/.dsh/delegation-hub.last-run.json`（`pinned` / `failed` + 原因），排障不用翻日志
 - 设置 → **委派中枢** 页面：提供商 / 模型 / 推理强度下拉 + 团队模式注入开关 + 专家团引擎提示，保存写回 profile 补丁，下一次委派生效
 - 逐专家覆盖：`~/.dsh/subagent-route-pin.json` 的 `experts` 字段（可选，优先级高于页面）
-- **团队面板事件树（0.10 新增）**：`dsh-team-status --serve` 面板新增「委派事件流」区块——读各扫描目录的 events.jsonl，按时间倒序列出最近 40 条（label/通道/结果/路由/来源），failover 与 failed 行红色高亮；坏行自动跳过。
-- **任务拆分器（0.10 新增，含设置页编辑器；每步可配专家与技能）**：每个步骤除模型外还可填「专家」（子代理以该专家身份执行）与「技能」（逗号分隔，子代理优先加载这些技能），委派时以提示前缀注入子代理首条消息。：设置页「步骤路由」区直接添加步骤行（步骤名+提供商+模型下拉），保存写入配置行；settings 文件的 steps 字段同样生效（配置行按键优先，两者并集）。：settings 文件的 `steps` 字段让一次目标可以拆成多个串行子委派、每步用不同模型——委派时给 label 加 `#步骤名` 后缀（如 `调研报告#research`），该步即走对应路由。优先级 `experts > roles > steps > 配置行 > default`；不带后缀的 label 完全不受影响；未知步骤名回落配置行。一键写入：`node bin/step-preset.mjs dev`（或注册后的 `dsh-step-preset dev`，research/code/review 三车道，支持单步覆盖与 clear，写前自动备份）。
-- **captain 报错上报（0.10 新增）**：配置了 failoverRoute 的团队成员在运行中触发故障切换时，插件会按 agent-teams 的信箱契约（isTeamMessage：id/from/to/content/ts）向船长信箱 `.agent-teams/<teamId>/inbox/captain.jsonl` 追加一条来自 `delegation-hub` 的报告（含失败码与改写路由），写入采用读全文+重写的原子模式，与 agent-teams 自身写入互不丢行。非团队 label 或 cwd 不可得时静默跳过。
-- **委派事件流（0.9 新增）**：每次委派的判定（label/channel/source/route/outcome/reason）除单条覆盖的 `last-run.json` 外，还追加写入 `~/.dsh/delegation-hub.events.jsonl`（一行一个 JSON 对象，追加式永不覆盖）。`readEvents(path)`（由 `@…/dsh-delegation-hub` 导出）读取该流并跳过损坏行，供树状图、captain 报告与证据锚点消费。ready.json 新增 `drift` 字段：生效路由偏离配置行时给出 `{pinned, effective, by}`，一致时为 null。
-- **运行中故障切换（0.9 新增）**：配置行加 `failoverRoute: {provider, model}` 后，被钉住的子代理在运行中撞上车道级故障（额度耗尽 QUOTA、限流 RATE_LIMIT、鉴权 AUTH、凭据缺失 MISSING_CREDENTIAL、适配器消失 NO_ADAPTER）时，其后续请求会被改写到该备用路由（仅切换一次，删除继承的推理强度），并写一条 `outcome: "failover"` 的 last-run 记录。区别于 `fallback`（只管启动阶段）：failover 管的是子代理已经跑起来之后的流内错误。不配置即关闭。
+- **团队面板事件树（0.9 新增）**：`dsh-team-status --serve` 面板新增「委派事件流」区块——读各扫描目录的 events.jsonl，按时间倒序列出最近 40 条（label/通道/结果/路由/来源），failover 与 failed 行红色高亮；坏行自动跳过。
+- **任务拆分器（0.9 新增，含设置页编辑器；每步可配专家与技能）**：每个步骤除模型外还可填「专家」（子代理以该专家身份执行）与「技能」（逗号分隔，子代理优先加载这些技能），委派时以提示前缀注入子代理首条消息。设置页「步骤路由」区直接添加步骤行（步骤名+提供商+模型下拉），保存写入配置行；settings 文件的 `steps` 字段同样生效（配置行按键优先，两者并集）。`steps` 字段让一次目标可以拆成多个串行子委派、每步用不同模型——委派时给 label 加 `#步骤名` 后缀（如 `调研报告#research`），该步即走对应路由。优先级 `experts > roles > steps > 配置行 > default`；不带后缀的 label 完全不受影响；未知步骤名回落配置行。一键写入：`node bin/step-preset.mjs dev`（或注册后的 `dsh-step-preset dev`，research/code/review 三车道，支持单步覆盖与 clear，写前自动备份）。
+- **captain 报错上报（0.9 新增）**：配置了 failoverRoute 的团队成员在运行中触发故障切换时，插件会按 agent-teams 的信箱契约（isTeamMessage：id/from/to/content/ts）向船长信箱 `.agent-teams/<teamId>/inbox/captain.jsonl` 追加一条来自 `delegation-hub` 的报告（含失败码与改写路由），写入采用读全文+重写的原子模式，与 agent-teams 自身写入互不丢行。非团队 label 或 cwd 不可得时静默跳过。
+- **委派事件流（0.9 新增）**：每次委派的判定（label/channel/source/route/outcome/reason）除单条覆盖的 `last-run.json` 外，还追加写入 `~/.dsh/delegation-hub.events.jsonl`（一行一个 JSON 对象，追加式永不覆盖）。`readEvents(path)`（由 `@…/dsh-delegation-hub` 导出）读取该流并跳过损坏行，供树状图、captain 报告与证据锚点消费。ready.json 的 `drift` 字段是**挂载期快照**：有配置行时生效路由恒等于该行（`route` 与 `configRow` 同一个值），无配置行时没有可比基准，所以它当前恒为 `null`；委派期被 experts/roles/steps 覆盖后的实际路由与来源请看 `events.jsonl` 或 `last-run.json` 的 `source` 字段。
+- **运行中故障切换（0.9 新增，仅 Agent-Teams 团队成员）**：配置行加 `failoverRoute: {provider, model}` 后，**Agent-Teams 团队成员**在运行中撞上车道级故障（额度耗尽 QUOTA、限流 RATE_LIMIT、鉴权 AUTH、凭据缺失 MISSING_CREDENTIAL、适配器消失 NO_ADAPTER）时，其后续请求会被改写到该备用路由（仅切换一次，删除继承的推理强度），并写一条 `outcome: "failover"` 的 last-run 记录。**单发子代理与专家团专家不走这条接缝，不受 `failoverRoute` 影响**——`armFailover` 的唯一调用点在 `startActivation` 团队钩子内，`RoutePinProvider.start()` 里没有对应逻辑。区别于 `fallback`（只管启动阶段）：failover 管的是成员已经跑起来之后的流内错误。不配置即关闭。
 - **按角色路由（0.9 新增）**：settings 文件的 `roles` 字段把 Agent-Teams 成员按其团队角色钉到不同模型，优先级 `experts > roles > 配置行 > default`。角色来自 `.agent-teams/<teamId>/team.json` 的 `members[].role`（团队状态文件），示例：
   ```json
   {
@@ -46,7 +46,7 @@
 
 ```bash
 # 从 tarball
-dsh plugin --profile desktop add "./dsh-delegation-hub-0.9.1.tgz"
+dsh plugin --profile desktop add "./dsh-delegation-hub-0.9.2.tgz"
 
 # 从 npm（发布后）
 dsh plugin --profile desktop add "dsh-delegation-hub"
@@ -93,7 +93,7 @@ cat ~/.dsh/delegation-hub.ready.json                  # 有且 at 是本次启�
 
 ## 与宿主自带路由配置的差距（诚实版）
 
-Agent Teams 本身有 `memberLlmProvider` / `memberModel`，专家团有 profile 行——不装本插件也能给成员配模型。下表按 ds-agent 式三态（Ahead 领先 / Parity 同能 / Behind 落后）写清差在哪，供选型；最后更新 2026-11-08，对应 commit `0f9befc`。
+Agent Teams 本身有 `memberLlmProvider` / `memberModel`，专家团有 profile 行——不装本插件也能给成员配模型。下表按 ds-agent 式三态（Ahead 领先 / Parity 同能 / Behind 落后）写清差在哪，供选型；最后更新 2026-11-09，对应 commit `3718caa`。
 
 | 维度 | 宿主自带配置 | 本插件 | 判定 |
 |---|---|---|---|
@@ -101,14 +101,14 @@ Agent Teams 本身有 `memberLlmProvider` / `memberModel`，专家团有 profile
 | 分层路由优先级 | 无分层概念：一个团队一套成员路由 | experts > roles > steps > 配置行 > settings default 五级，逐专家/逐角色/逐步骤各可单独钉 | **Ahead** |
 | 每步一模型 | 做不到（成员路由按团队粒度） | `steps` + label `#步骤名` 后缀，串行子委派各走各的模型，还可挂专家身份与技能指令 | **Ahead** |
 | 热切换 | 改 profile patch 后需重启或重载 | `volatile` 字段 + 每次委派重读 settings 文件，保存即对下一次委派生效 | **Ahead** |
-| 运行中故障切换 | 无：成员车道中途配额耗尽只能人工换 | `failoverRoute` 监听五类车道码（QUOTA/RATE_LIMIT/AUTH/MISSING_CREDENTIAL/NO_ADAPTER），一次性改写后续请求并上报队长 | **Ahead** |
+| 运行中故障切换（仅团队成员） | 无：成员车道中途配额耗尽只能人工换 | `failoverRoute` 监听五类车道码（QUOTA/RATE_LIMIT/AUTH/MISSING_CREDENTIAL/NO_ADAPTER），一次性改写后续请求并上报队长；单发子代理与专家团专家不经过这条接缝 | **Ahead** |
 | 目录预校验 | 无 | 保存前对照模型目录 advisory 提示（可强制写入）；委派时 `checkRoute` 对照 llm 目录，strict 可拒绝 | **Ahead** |
-| 取证 | 无 | last-run.json（单槽）+ events.jsonl（追加事件流，坏行跳过）+ ready.json（含 drift）+ 队长信箱上报 | **Ahead** |
+| 取证 | 无 | last-run.json（单槽）+ events.jsonl（追加事件流，坏行跳过）+ ready.json（挂载期快照；`drift` 当前恒 null，委派期覆盖看 events/last-run 的 `source`）+ 队长信箱上报 | **Ahead** |
 | 可观测面板 | 无 | `dsh-team-status` 文本面板 + `--serve` HTML 面板（含 `~stale` 无进展成员标记） | **Ahead** |
 | 持久化任务 | 宿主管（成员会话是宿主会话） | 本插件不持久化任务，只观测路由事件——任务恢复交给宿主 | Parity（职责边界） |
 | 审批门控 | 宿主审批体系 | 本插件不加审批：路由选择本身就是主人动作 | Behind（若你要的是 ds-agent 式 request_approval，那是宿主层需求，不是路由插件的事） |
 | 跨重启任务续跑 | 宿主管 | 同上，不涉及 | Parity |
-| 宿主版本耦合 | 无额外耦合 | 依赖 `SubagentRuntime.startActivation` 接缝，DSH 发 rc 需重验（`peerDependencies >=0.2.0-rc.1 <0.4.0` + 兼容矩阵） | Behind（内部契约风险，tests/logs.mjs 门禁缓解） |
+| 宿主版本耦合 | 无额外耦合 | 依赖 `SubagentRuntime.startActivation` 接缝，DSH 发 rc 需重验（`peerDependencies` 为 4 段 OR 链，逐 minor 分支放行 rc + 兼容矩阵） | Behind（内部契约风险，tests/logs.mjs 门禁缓解） |
 
 一句话：**宿主配置回答"这个团队用什么模型"，本插件回答"每一发委派该用什么模型、错了怎么办、怎么证明"**。只要你的路由需求停在团队粒度且永不切换，宿主自带配置就够；一旦需要逐专家/逐步骤/热切换/故障兜底中的任何一项，就是本插件存在的理由。
 
@@ -194,7 +194,7 @@ npm run ready         # 只看盘上的就绪记录，不跑测试
 {
   "schema": 1,
   "plugin": "delegation-hub",
-  "version": "0.8.13",
+  "version": "0.9.2",
   "at": "2026-10-20T12:04:11.208Z",
   "mounted": true,
   "providerName": "pinned-account",
@@ -235,7 +235,7 @@ node test/logs.mjs --log captured-console.txt
 | 重试后仍然失败 | 抛出原始错误，不吞 | — |
 | 注入的路由和继承路由本来就一样 | 不重试（重试等于再撞一次同一额度） | — |
 
-边界要说清楚：**只在启动阶段可观测**。子代理跑起来之后，流式请求中途的 429/额度错误发生在 `start()` 返回之后，插件抓不到——那种情况要看 DSH 自己的重试与错误上报。所以 `fallback` 兜的是「开局就撞墙」，不是「跑到一半断粮」。
+边界要说清楚：**`fallback` 只管启动阶段**。子代理跑起来之后，流式请求中途的 429/额度错误发生在 `start()` 返回之后，`fallback` 抓不到。这类「跑到一半断粮」由 `failoverRoute` 接管，但**只对 Agent-Teams 团队成员生效**——单发子代理与专家团专家不走 `startActivation` 那条接缝，中途失败仍要靠 DSH 自己的重试与错误上报。所以：`fallback` 兜「开局就撞墙」，`failoverRoute` 兜「团队成员跑到一半断粮」，其余情况本插件不介入。
 
 ## 兼容性
 
@@ -243,12 +243,12 @@ node test/logs.mjs --log captured-console.txt
 
 | DSH / `@deepseek-ai/dsh-tool-subagent` | 状态 | 说明 |
 | --- | --- | --- |
-| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 当前 `peerDependencies` 写的范围，`0.2.1-rc.2`、`0.2.1-rc.3` 实测 269 项断言（run 225 + client 44）全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
+| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 人类可读的覆盖区间；`peerDependencies` 的实际写法是 4 段 OR 链 `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-rc.1 <0.2.2-0 \|\| >=0.2.2-rc.1 <0.3.0-0 \|\| >=0.3.0-rc.1 <0.4.0-0`（逐 minor 分支放行 rc，单段宽范围会 drop 掉 `0.2.1-rc.*` 并触发 ERESOLVE），`0.2.1-rc.2`、`0.2.1-rc.3` 实测 279 项断言（run 227 + client 52）全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
 | `0.2.1-rc.3` | ✅ 已验证 | 桌面端 0.2.1-rc.3 上 readiness 记录显示 `seams: ["startActivation"]`、`teamInjection: installed`，配置行路由生效 |
 | `0.2.0-rc.x` | ❓ 未验证 | 接口面看起来一致（旧版走 `startContinuable`），但没跑过；装了会看到 peer 警告 |
 | `>= 0.4.0` | ⚠️ 未验证 | 超出 peer 范围，DSH 插件管理器会标「异常」并拒绝启动；上游一旦改动 provider 或创建子代理的接缝，日志会先缺，插件按能力标志降级 |
 
-`peerDependencies` 从「钉死单个 `0.2.1-rc.2`」放宽到 `>=0.2.0-rc.1 <0.4.0`：DSH 每次发 rc 都不再让这个插件被判不兼容、也不会因此被插件管理器拦下。范围上限留在 `0.4.0`，是因为 provider 和创建子代理的接缝属于内部契约，跨 minor 需要重新验证——发版前请跑 `npm test`（269 项断言（run 225 + client 44））与 `npm run ready`（真实宿主上的 readiness）。
+`peerDependencies` 从「钉死单个 `0.2.1-rc.2`」放宽到 4 段 OR 链：`>=0.2.0-rc.1 <0.2.1-0 || >=0.2.1-rc.1 <0.2.2-0 || >=0.2.2-rc.1 <0.3.0-0 || >=0.3.0-rc.1 <0.4.0-0`。DSH 每次发 rc 都不再让这个插件被判不兼容、也不会因此被插件管理器拦下。**必须逐 minor 分支放行 rc**：只写一段 `0.2.0-rc.1` 到 `0.4.0` 的宽范围，会按 npm 的预发布规则 drop 掉 `0.2.1-rc.*` 这类版本，装的时候直接 ERESOLVE。范围上限留在 `0.4.0`，是因为 provider 和创建子代理的接缝属于内部契约，跨 minor 需要重新验证——发版前请跑 `npm test`（279 项断言（run 227 + client 52））与 `npm run ready`（真实宿主上的 readiness）。
 
 同一个范围还写在 `package.json` 的 `engines.dsh` 里，两处**必须逐字相同**（`npm test` 会比对，改一处不改另一处会红）：
 
@@ -289,12 +289,12 @@ if (capability.teamInjection === 'unavailable') {
 ## 测试
 
 ```bash
-node test/run.mjs        # 269 项断言（run 225 + client 44），不需要 DSH 在跑
+node test/run.mjs        # 279 项断言（run 227 + client 52），不需要 DSH 在跑
 node test/logs.mjs       # 检查真实启动留下的就绪记录
 npm run verify           # 两个一起，且 --strict
 ```
 
-269 项断言（run 225 + client 44）：路由优先级、文件热读、strict 校验、团队注入、覆盖团队成员自带路由（默认覆盖 / `overrideMemberRoute: false` 时尊重 / 保留调用方其他字段 / 丢弃旧路由的 effort / 覆盖失败退回调用方原路由）、开关关闭、缺路由不阻断、dispose 还原、重复挂载换路由、能力标志（installed / unavailable / 无任何接缝）、多接缝（只有 `startActivation` / 只有 `startContinuable` / 两条都在时优先前者且只注入一次）、启动失败回退（单发 / 团队 / 关闭开关 / 重试仍失败 / 同路由不重试）、日志契约、就绪记录（正常挂载 / 缺服务 / 版本一致 / 生效路由与来源 / 设置文件 default 被配置行盖住时报警 / 缺路由字段时 WARN 而不是打印 `undefined -> undefined` / 未来时间戳不报健康年龄）、激活探针（成功覆盖陈旧 parked / 版本与 package.json 严格相等 / 拒绝挂载时记 `degraded` 而非 `applied` / 只 import 不 apply 记 `parked` / `apply()` 抛错记 `failed` 且保留原文 / 四个相位都带 `mounted` 与 `invoked` / 冒烟检查读旧 schema 的 `note`/`error` 不丢原因 / 空字符串理由会落到旧字段 / 过旧探针报版本与年龄 / 损坏 JSON 记 `unreadable` 且不冒充「未被 import」/ 非对象记录同样判失败且判定不随 `--strict` 变化 / 未来时间戳不报健康年龄 / 探针缺失判失败而不是「删掉就过」 / 版本不一致判 `MISS` 而不是先给绿灯 / 就绪记录为非对象时判失败且不崩栈、判定与损坏 JSON 一致）、发包元数据（engines.dsh 与 peer 范围一致 / bin 路径无前导 ./ 且文件存在 / 包内 cordis.patch.yml 的 name 指向本包且是可解析的模块路径）。
+279 项断言（run 227 + client 52）：路由优先级、文件热读、strict 校验、团队注入、覆盖团队成员自带路由（默认覆盖 / `overrideMemberRoute: false` 时尊重 / 保留调用方其他字段 / 丢弃旧路由的 effort / 覆盖失败退回调用方原路由）、开关关闭、缺路由不阻断、dispose 还原、重复挂载换路由、能力标志（installed / unavailable / 无任何接缝）、多接缝（只有 `startActivation` / 只有 `startContinuable` / 两条都在时优先前者且只注入一次）、启动失败回退（单发 / 团队 / 关闭开关 / 重试仍失败 / 同路由不重试）、日志契约、就绪记录（正常挂载 / 缺服务 / 版本一致 / 生效路由与来源 / 设置文件 default 被配置行盖住时报警 / 缺路由字段时 WARN 而不是打印 `undefined -> undefined` / 未来时间戳不报健康年龄）、激活探针（成功覆盖陈旧 parked / 版本与 package.json 严格相等 / 拒绝挂载时记 `degraded` 而非 `applied` / 只 import 不 apply 记 `parked` / `apply()` 抛错记 `failed` 且保留原文 / 四个相位都带 `mounted` 与 `invoked` / 冒烟检查读旧 schema 的 `note`/`error` 不丢原因 / 空字符串理由会落到旧字段 / 过旧探针报版本与年龄 / 损坏 JSON 记 `unreadable` 且不冒充「未被 import」/ 非对象记录同样判失败且判定不随 `--strict` 变化 / 未来时间戳不报健康年龄 / 探针缺失判失败而不是「删掉就过」 / 版本不一致判 `MISS` 而不是先给绿灯 / 就绪记录为非对象时判失败且不崩栈、判定与损坏 JSON 一致）、发包元数据（engines.dsh 与 peer 范围一致 / bin 路径无前导 ./ 且文件存在 / 包内 cordis.patch.yml 的 name 指向本包且是可解析的模块路径）。
 
 `test/run.mjs` 证明的是**插件逻辑没坏**；`test/logs.mjs` 证明的是**它在这个 DSH 构建里还挂着**。两件事会分别失败，上游接口变更先体现在后者。
 
@@ -303,7 +303,7 @@ npm run verify           # 两个一起，且 --strict
 升级 DSH 后按这个顺序走，别跳步：
 
 ```bash
-node test/run.mjs                 # 1. 逻辑层：269 项断言还绿吗
+node test/run.mjs                 # 1. 逻辑层：279 项断言还绿吗
 # 2. 重启 DSH（只改插件不用，改 DSH 本体必须）
 npm run ready                     # 3. 挂载层：就绪记录还是这次启动写的吗
 ```
