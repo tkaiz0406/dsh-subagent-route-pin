@@ -35,7 +35,7 @@
   }
   ```
   一键写入：`node bin/role-preset.mjs delivery`（或注册后的 `dsh-role-preset delivery`）；单角色覆盖 `dsh-role-preset delivery reviewer=xiaomi/mimo-v2.6-pro`；清除 `dsh-role-preset clear`。改动下一次团队委派即生效（settings 每次委派热读）；写前自动备份。
-- **兼容保留的旧名**（故意不改，避免静默丢失已配置的路由）：用户设置文件 `~/.dsh/subagent-route-pin.json` 与环境变量 `DSH_ROUTE_PIN_*` 沿用旧名；插件本身、探针记录、页面均已改名
+- **兼容保留的旧名**（故意不改，避免静默丢失已配置的路由）：用户设置文件 `~/.dsh/subagent-route-pin.json` 与环境变量 `DSH_ROUTE_PIN_*` 沿用旧名；插件本身、探针记录、页面均已改名。GitHub 仓库 2026-11-10 已从 `dsh-subagent-route-pin` 改名为 [`dsh-delegation-hub`](https://github.com/tkaiz0406/dsh-delegation-hub)（旧地址 GitHub 自动 301 重定向），本地物理目录同步改名；宿主内部 bundle 名、settings 文件名、env 前缀保持不变。
 
 ## 配套文档
 
@@ -335,7 +335,7 @@ pnpm pack --pack-destination dist
 >
 > 另需同步 `test/client.mjs`、`test/browser-harness.html` 里的 id 断言，以及 README 里的安装示例。
 
-GitHub 仓库名与 npm 包名保持一致（`dsh-delegation-hub`），仓库归属 `tkaiz0406` 是 GitHub 账号，与 npm scope 无关，`repository`/`homepage`/`bugs` 无需随 npm 改名。
+GitHub 仓库名与 npm 包名保持一致（`dsh-delegation-hub`，2026-11-10 已由 `dsh-subagent-route-pin` 改名，旧地址自动 301），仓库归属 `tkaiz0406` 是 GitHub 账号，与 npm scope 无关，`repository`/`homepage`/`bugs` 无需随 npm 改名。每次 release 均打 tag（`v0.9.2` 起）并附 GitHub Release（tarball 与说明），代码下载用户请同时看 [dsh-delegation-skills](https://github.com/tkaiz0406/dsh-delegation-skills)——两份配套技能 `need-subagent`（要不要开子代理 + 派单模板）与 `delegation-timebox`（派单后时长控制），与本插件互补，装进 `~/.dsh/skills/` 即生效。
 
 ## 回滚
 

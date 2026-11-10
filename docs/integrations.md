@@ -8,6 +8,25 @@
 - 取证文件：`~/.dsh/delegation-hub.last-run.json`（单条判定）、`~/.dsh/delegation-hub.events.jsonl`（追加事件流）、`~/.dsh/delegation-hub.ready.json`（挂载与生效路由，含 `drift`）。
 - 当前 profile 实配（`cordis.patch.yml`）：`delegation-hub` 行 `provider: xiaomi` / `model: mimo-v2.6-flash` / `reasoningEffort: high` / `strict: false` / `fallback: true` / `teamInjection: true`；`agent-default-model` 行 `provider: workbuddy-global` / `model: hy4free`（主 agent 车道）。
 
+> **版本说明**：各插件标题括号里是整理时（2026-11-08）本机安装的版本，可能与 npm latest 略有滞后；「仓库」列给出该插件的上游地址（npm `repository` 字段，2026-11-10 核对），`dsh-our-free-model` 与 `dsh-purge` 为本机本地插件（link 安装，无公开仓库）。本插件的仓库：https://github.com/tkaiz0406/dsh-delegation-hub 。
+
+| # | 插件 | 版本 | 仓库 |
+| --- | --- | --- | --- |
+| 1 | dsh-our-free-model | 本机本地 | （link 安装自 `C:/Users/沈思宏/.dsh/plugins-local/dsh-our-free-model`） |
+| 2 | dsh-connect-workbuddy | 5.20.2 | https://github.com/dingminhua/dsh-connect-workbuddy |
+| 3 | @michengai/dsh-agency-agents | 1.2.26 | https://github.com/MichengAI/dsh-agency-agents |
+| 4 | @deepseek-ai/dsh-subagent-claude-code | 0.2.2-rc.1 | https://github.com/deepseek-ai/deepseek-harness |
+| 5 | @nanmicoder/dsh-agent-teams | 0.1.29 | https://github.com/NanmiCoder/dsh-agent-teams |
+| 6 | @michengai/dsh-code-review | 1.0.8 | https://github.com/MichengAI/dsh-code-review |
+| 7 | @a9i5k4/dsh-auto-memory | 3.3.17 | https://github.com/Aik358/dsh-auto-memory |
+| 8 | billion-context | 0.1.212 | https://github.com/ranxianglei/billion-context |
+| 9 | dsh-context | 0.82.1 | https://github.com/bowenliang123/dsh-context |
+| 10 | dsh-ops | 0.5.0 | https://github.com/T-Auto/dsh-ops |
+| 11 | dsh-composition-doctor | 0.4.0 | https://github.com/lemonxiny55/dsh-composition-doctor |
+| 12 | dsh-purge | 1.1.88 | （link 安装自 `D:/沈思宏/DSH桌面/dsh-purge-1.1.88`） |
+| 13 | @weibaohui/dsh-continue | 0.3.12 | https://github.com/weibaohui/dsh-continue |
+| 14 | @michengai/dsh-skills-manager | 1.2.35 | https://github.com/MichengAI/dsh-skills-manager |
+
 ## 一、路由与模型通道类
 
 ### 1. dsh-our-free-model（本机本地插件）

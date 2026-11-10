@@ -2,7 +2,7 @@
 
 - 抓取日期：2026-11-08
 - 联网方式：本机访问 GitHub / 外网全部走 clash 代理 `http://127.0.0.1:7897`（curl 加 `-x http://127.0.0.1:7897`）；下文每条来源标注「代理=是/否」
-- 调研对象：DeepSeek 官方 SuperAgent（`deepseek-ai` 组织下的项目）；本插件 `dsh-delegation-hub`（工作区 `D:\沈思宏\DSH桌面\dsh-plugins\dsh-subagent-route-pin`，`package.json` name=`dsh-delegation-hub` version=`0.9.0`）
+- 调研对象：DeepSeek 官方 SuperAgent（`deepseek-ai` 组织下的项目）；本插件 `dsh-delegation-hub`（工作区 `D:\沈思宏\DSH桌面\dsh-plugins\dsh-delegation-hub`，`package.json` name=`dsh-delegation-hub`，整理时 version=`0.9.0`，仓库现名 [tkaiz0406/dsh-delegation-hub](https://github.com/tkaiz0406/dsh-delegation-hub)）
 
 ---
 
