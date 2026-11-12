@@ -900,6 +900,7 @@ window.__ModuleLoader__.load({
       fontSize: '13px'
     }
     const BUTTON_STYLE = {
+      boxSizing: 'border-box',
       padding: '6px 14px',
       borderRadius: '999px',
       border: '1px solid var(--dsw-alias-border-l2)',
