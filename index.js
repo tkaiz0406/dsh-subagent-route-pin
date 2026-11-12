@@ -60,9 +60,15 @@ export const name = 'delegation-hub'
 // literally named "required"/"optional" — parked plugin, no log line, and a settings page
 // with empty provider/model dropdowns. Every plugin in the ecosystem uses the array form.
 //
+// `webServer` powers the same-origin read routes the Settings page fetches
+// (/delegation-hub/last-run, /delegation-hub/options); without declaring it the
+// service never appears on ctx and both registrations silently no-op. It is a
+// core desktop service (the web GUI itself runs on it), same hard requirement
+// as `subagents`.
+//
 // `llm` is deliberately NOT listed: it is only read by the best-effort route check, whose
 // call site is wrapped in try/catch, so a build without it must degrade, not park.
-export const inject = ['subagents', 'agents']
+export const inject = ['subagents', 'agents', 'webServer']
 
 /**
  * Activation probe. `load.json` proves only that the entry file was imported; it
