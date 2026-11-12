@@ -891,6 +891,7 @@ window.__ModuleLoader__.load({
 
     const SELECT_STYLE = {
       width: '100%',
+      boxSizing: 'border-box',
       padding: '6px 8px',
       borderRadius: '8px',
       border: '1px solid var(--dsw-alias-border-l2)',
