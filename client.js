@@ -32,7 +32,58 @@ window.__ModuleLoader__.load({
     // extra_high exist on real lanes (deepseek-flash: low/high/max; trae sends
     // extra_high), and a stored value outside this list would silently render
     // as the first option in a controlled select, so the list must cover them.
+    // Since 0.9.3 this static list is only the FALLBACK: when the live catalog
+    // carries the model's declared efforts (modelCatalog → model.reasoning,
+    // the same projection the composer's effort menu reads), the select shows
+    // those instead, so an effort the model would reject at request time
+    // (UNSUPPORTED_REASONING_EFFORT) is never offered in the first place.
     const EFFORTS = ['', 'low', 'medium', 'high', 'max', 'extra_high']
+
+    /**
+     * Effort options the catalog declares for one route.
+     *
+     * @returns `{ efforts, defaultEffort }` when the model declares its
+     *   efforts, `null` when the model declares NONE (requesting any effort
+     *   fails UNSUPPORTED_REASONING_EFFORT — see dsh-llm resolveModelInfo), or
+     *   `undefined` when the catalog cannot answer (not ready, provider/model
+     *   missing). The caller keeps the static list on `undefined`, mirroring
+     *   the precheck rule "unknown ≠ unsupported".
+     */
+    function declaredEfforts(groups, provider, model) {
+      if (typeof provider !== 'string' || typeof model !== 'string' || provider === '' || model === '') return undefined
+      if (!Array.isArray(groups)) return undefined
+      const group = groups.find((candidate) => candidate?.id === provider)
+      if (group === undefined) return undefined
+      const entry = (group.models ?? []).find((candidate) => candidate?.id === model)
+      if (entry === undefined) return undefined
+      if (entry.reasoning === undefined || entry.reasoning === null) return null
+      const efforts = Array.isArray(entry.reasoning.efforts) ? entry.reasoning.efforts : []
+      return {
+        efforts: efforts.filter(
+          (effort) => effort !== null && typeof effort === 'object' && typeof effort.id === 'string' && effort.id !== ''
+        ),
+        defaultEffort: typeof entry.reasoning.defaultEffort === 'string' ? entry.reasoning.defaultEffort : undefined
+      }
+    }
+
+    /** Option label for one effort: localized name when the catalog ships one. */
+    function effortLabel(effort) {
+      const name = typeof effort?.name === 'string' && effort.name.trim() !== '' ? effort.name.trim() : effort.id
+      return name === effort.id ? effort.id : `${name}（${effort.id}）`
+    }
+
+    /**
+     * The effort a changed model keeps: a declared-and-supported value stays,
+     * anything the new model contradicts resets to the unpinned slot. An
+     * unknown catalog keeps the current value — the composer behaves the same.
+     */
+    function effortForModel(groups, provider, model, current) {
+      const declared = declaredEfforts(groups, provider, model)
+      if (declared === undefined) return current
+      if (declared === null) return ''
+      if (typeof current !== 'string' || current === '') return current
+      return declared.efforts.some((effort) => effort.id === current) ? current : ''
+    }
 
     const zh = {
       title: '委派中枢',
@@ -57,6 +108,10 @@ window.__ModuleLoader__.load({
       catalogFailed: '模型列表读取失败。',
       noModels: '当前没有提供方公布模型。',
       savedUnavailable: '已保存但当前不可用',
+      effortDefaultSuffix: '（默认）',
+      effortStaleSuffix: '（该模型未声明）',
+      effortNoneHint: '该模型未声明推理档位：留空（—）即可，任何档位都会被模型拒绝。',
+      effortFallbackHint: '模型目录里查不到该模型的档位声明：暂按通用档位显示。',
       teamLabel: '团队模式注入',
       teamHint:
         '开启：团队模式（Agent Teams / 专家团）成员在创建时被改到上面选的模型。关闭：成员继承大脑模型，本页只影响显式走 pinned-account 的子代理。',
@@ -124,6 +179,10 @@ window.__ModuleLoader__.load({
       catalogFailed: 'Could not load the model list.',
       noModels: 'No provider currently advertises a model.',
       savedUnavailable: 'Saved but currently unavailable',
+      effortDefaultSuffix: ' (default)',
+      effortStaleSuffix: ' (not declared by this model)',
+      effortNoneHint: 'This model declares no reasoning efforts: leave it empty (—); any effort is rejected by the model.',
+      effortFallbackHint: 'The catalog carries no effort declaration for this model: showing the generic list for now.',
       teamLabel: 'Inject into team mode',
       teamHint:
         'On: Agent-Teams / agency members are moved to the model above when they are created. Off: members inherit the main agent route and this page only affects explicit pinned-account subagents.',
@@ -196,14 +255,19 @@ window.__ModuleLoader__.load({
     }
 
     function sameSteps(left, right) {
-      const a = Array.isArray(left) ? left : []
-      const b = Array.isArray(right) ? right : []
+      // `fresh` rows (added but never typed into) carry no route yet: they are
+      // skipped by the serializer, so they must be invisible here too —
+      // otherwise 添加步骤 → 保存 compares an accepted route without the row
+      // against a draft with it and reports 「保存失败」 for a no-op.
+      const a = (Array.isArray(left) ? left : []).filter((row) => row?.fresh !== true)
+      const b = (Array.isArray(right) ? right : []).filter((row) => row?.fresh !== true)
       if (a.length !== b.length) return false
       return a.every(
       (row, index) =>
         row.name === b[index].name &&
         row.provider === b[index].provider &&
         row.model === b[index].model &&
+        (row.reasoningEffort ?? '') === (b[index].reasoningEffort ?? '') &&
         (row.expert ?? '') === (b[index].expert ?? '') &&
         (row.skills ?? '') === (b[index].skills ?? '')
     )
@@ -284,6 +348,7 @@ window.__ModuleLoader__.load({
             name,
             provider: route && typeof route.provider === 'string' ? route.provider : '',
             model: route && typeof route.model === 'string' ? route.model : '',
+            reasoningEffort: route && typeof route.reasoningEffort === 'string' ? route.reasoningEffort : '',
             expert: route && typeof route.expert === 'string' ? route.expert : '',
             skills: route && Array.isArray(route.skills) ? route.skills.join(', ') : ''
           }))
@@ -455,7 +520,12 @@ window.__ModuleLoader__.load({
           const firstModel =
             state.catalog.groups.find((group) => group.id === provider)?.models?.[0]?.id ?? ''
           publish({
-            draft: { ...state.draft, provider, model: firstModel },
+            draft: {
+              ...state.draft,
+              provider,
+              model: firstModel,
+              reasoningEffort: effortForModel(state.catalog.groups, provider, firstModel, state.draft.reasoningEffort)
+            },
             touched: true,
             conflict: false,
             failed: false,
@@ -465,7 +535,17 @@ window.__ModuleLoader__.load({
         },
         setModel(model) {
           const state = store.get()
-          publish({ draft: { ...state.draft, model }, touched: true, conflict: false, failed: false, landed: false })
+          publish({
+            draft: {
+              ...state.draft,
+              model,
+              reasoningEffort: effortForModel(state.catalog.groups, state.draft.provider, model, state.draft.reasoningEffort)
+            },
+            touched: true,
+            conflict: false,
+            failed: false,
+            landed: false
+          })
         },
         setEffort(reasoningEffort) {
           const state = store.get()
@@ -477,10 +557,15 @@ window.__ModuleLoader__.load({
             landed: false
           })
         },
+        setStepEffort(index, reasoningEffort) {
+          const state = store.get()
+          const steps = state.draft.steps.map((row, i) => (i === index ? { ...row, reasoningEffort, fresh: false } : row))
+          publish({ draft: { ...state.draft, steps }, touched: true, conflict: false, failed: false, landed: false, precheck: null, stepBlocked: false })
+        },
         addStep() {
           const state = store.get()
           publish({
-            draft: { ...state.draft, steps: [...state.draft.steps, { name: '', provider: '', model: '', expert: '', skills: '' }] },
+            draft: { ...state.draft, steps: [...state.draft.steps, { name: '', provider: '', model: '', reasoningEffort: '', expert: '', skills: '', fresh: true }] },
             touched: true,
             conflict: false,
             failed: false,
@@ -489,9 +574,20 @@ window.__ModuleLoader__.load({
             stepBlocked: false
           })
         },
+        /**
+         * Persist one step row's provider/model; the effort follows the
+         * model's declared efforts and resets when the new model contradicts
+         * it, mirroring the main route's behavior.
+         */
         setStep(index, patch) {
           const state = store.get()
-          const steps = state.draft.steps.map((row, i) => (i === index ? { ...row, ...patch } : row))
+          let effective = { ...patch, fresh: false }
+          if (patch.provider !== undefined || patch.model !== undefined) {
+            const steps = state.draft.steps.map((row, i) => (i === index ? { ...row, ...patch, fresh: false } : row))
+            const row = steps[index]
+            effective = { ...patch, fresh: false, reasoningEffort: effortForModel(state.catalog.groups, row.provider, row.model, row.reasoningEffort ?? '') }
+          }
+          const steps = state.draft.steps.map((row, i) => (i === index ? { ...row, ...effective } : row))
           publish({ draft: { ...state.draft, steps }, touched: true, conflict: false, failed: false, landed: false, precheck: null, stepBlocked: false })
         },
         removeStep(index) {
@@ -602,6 +698,9 @@ window.__ModuleLoader__.load({
             for (const row of draft.steps ?? []) {
               if (row.name.trim() === '' || row.provider === '' || row.model === '') continue
               const lane = { provider: row.provider, model: row.model }
+              if (typeof row.reasoningEffort === 'string' && row.reasoningEffort.trim() !== '') {
+                lane.reasoningEffort = row.reasoningEffort.trim()
+              }
               if (typeof row.expert === 'string' && row.expert.trim() !== '') lane.expert = row.expert.trim()
               if (typeof row.skills === 'string' && row.skills.trim() !== '') {
                 lane.skills = row.skills.split(/[,，]/).map((skill) => skill.trim()).filter((skill) => skill !== '')
@@ -702,6 +801,43 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * One effort `<select>` shared by the main route and step rows. Options
+     * come from the model's declared efforts when the catalog carries them
+     * (labeled with the localized name and marking the default), fall back to
+     * the static EFFORTS list when the catalog cannot answer, and degrade to
+     * just the empty slot when the model explicitly declares none. A stored
+     * value the model no longer declares is still rendered (marked stale) so
+     * a controlled select never silently snaps to the first option.
+     */
+    function effortSelect(t, value, options, onChange, disabled) {
+      const { efforts, declared, defaultEffort, stale } = options
+      const optionNodes = [h('option', { key: 'none', value: '' }, '—')]
+      if (declared === null) {
+        // The model explicitly declares no efforts; only the empty slot plus
+        // any stale stored value survive.
+      } else if (Array.isArray(efforts) && efforts.length > 0) {
+        for (const effort of efforts) {
+          const isDefault = effort.id === defaultEffort
+          const text = `${effortLabel(effort)}${isDefault ? t('effortDefaultSuffix') : ''}`
+          optionNodes.push(h('option', { key: effort.id, value: effort.id }, text))
+        }
+        if (stale !== undefined && stale !== '' && !efforts.some((effort) => effort.id === stale)) {
+          optionNodes.push(h('option', { key: `stale-${stale}`, value: stale }, `${stale}${t('effortStaleSuffix')}`))
+        }
+      } else {
+        for (const effort of EFFORTS) {
+          if (effort === '') continue
+          optionNodes.push(h('option', { key: effort, value: effort }, effort))
+        }
+      }
+      return h(
+        'select',
+        { style: { ...SELECT_STYLE, minWidth: 0 }, value, disabled, onChange: (event) => onChange(event.currentTarget.value) },
+        optionNodes
+      )
+    }
+
+    /**
      * Live per-row issues of the step editor. Pure derivation from the draft
      * rows plus the catalog on every render — nothing is written back into the
      * draft or the store, so fixing a field clears the flag on the next frame
@@ -710,6 +846,12 @@ window.__ModuleLoader__.load({
      * advertise each flag their row; a catalog that is not ready or advertises
      * no groups never raises the last issue, to avoid false alarms while the
      * list is still loading or empty.
+     *
+     * A row the user added but has not touched (`fresh: true`, set by addStep
+     * and cleared on the first setStep) raises no issues at all: flagging a
+     * just-created placeholder row painted the whole editor yellow and its
+     * "issues" would block a save that would skip the row anyway. The first
+     * keystroke arms the full checks for that row.
      */
     function stepIssues(steps, catalog, rows) {
       const list = Array.isArray(steps) ? steps : []
@@ -728,6 +870,7 @@ window.__ModuleLoader__.load({
         Array.isArray(rows) &&
         rows.length > 0
       return list.map((row) => {
+        if (row?.fresh === true) return []
         const issues = []
         const name = String(row?.name ?? '').trim()
         if (name === '') issues.push('name')
@@ -863,6 +1006,15 @@ window.__ModuleLoader__.load({
       const models = rows.filter((row) => row.provider === state.draft.provider)
       const editable = state.writable && state.status === 'ready' && !state.saving
       const dirty = !sameRoute(state.draft, state.saved)
+      // Effort options for the main route: declared by the selected model when
+      // the catalog knows it, generic list otherwise.
+      const mainEffort = declaredEfforts(state.catalog.groups, state.draft.provider, state.draft.model)
+      const mainEffortOptions =
+        mainEffort === undefined
+          ? { efforts: undefined, declared: undefined, defaultEffort: undefined, stale: undefined }
+          : mainEffort === null
+            ? { efforts: [], declared: null, defaultEffort: undefined, stale: state.draft.reasoningEffort }
+            : { ...mainEffort, stale: state.draft.reasoningEffort }
       let status = ''
       if (state.catalog.status === 'loading') status = label(t, 'catalogLoading')
       else if (state.catalog.status === 'error') status = label(t, 'catalogFailed')
@@ -930,17 +1082,13 @@ window.__ModuleLoader__.load({
         ),
         fieldRow(
           label(t, 'effort'),
-          h(
-            'select',
-            {
-              style: SELECT_STYLE,
-              value: state.draft.reasoningEffort,
-              disabled: !editable,
-              onChange: (event) => face.actions.setEffort(event.currentTarget.value)
-            },
-            EFFORTS.map((effort) => h('option', { key: effort || 'none', value: effort }, effort === '' ? '—' : effort))
-          )
+          effortSelect(t, state.draft.reasoningEffort, mainEffortOptions, (value) => face.actions.setEffort(value), !editable)
         ),
+        state.draft.provider !== '' && state.draft.model !== '' && mainEffort === null
+          ? h('p', { style: HINT_STYLE }, label(t, 'effortNoneHint'))
+          : state.draft.provider !== '' && state.draft.model !== '' && mainEffort === undefined && state.catalog.status === 'ready' && state.catalog.groups.length > 0
+            ? h('p', { style: HINT_STYLE }, label(t, 'effortFallbackHint'))
+            : null,
         h(
           'label',
           { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px' } },
@@ -1095,7 +1243,7 @@ window.__ModuleLoader__.load({
             ),
             h(
               'div',
-              { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px' } },
+              { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(90px, 0.8fr)', gap: '8px' } },
               h('input', {
                 placeholder: label(t, 'stepsExpertPlaceholder'),
                 value: row.expert ?? '',
@@ -1111,7 +1259,21 @@ window.__ModuleLoader__.load({
                 maxLength: 120,
                 style: { ...INPUT_STYLE, minWidth: 0 },
                 onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
-              })
+              }),
+              effortSelect(
+                t,
+                row.reasoningEffort ?? '',
+                (() => {
+                  const declared = declaredEfforts(state.catalog.groups, row.provider, row.model)
+                  return declared === undefined
+                    ? { efforts: undefined, declared: undefined, defaultEffort: undefined, stale: row.reasoningEffort ?? '' }
+                    : declared === null
+                      ? { efforts: [], declared: null, defaultEffort: undefined, stale: row.reasoningEffort ?? '' }
+                      : { ...declared, stale: row.reasoningEffort ?? '' }
+                })(),
+                (value) => face.actions.setStepEffort(index, value),
+                !editable
+              )
             ),
             flagged
               ? h(

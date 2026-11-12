@@ -43,8 +43,8 @@ function findSaveButton(node) {
 
 /** Test-side mirror of the card's dirty rule (sameRoute + sameSteps). */
 function sameRouteLike(left, right) {
-  const la = Array.isArray(left.steps) ? left.steps : []
-  const ra = Array.isArray(right.steps) ? right.steps : []
+  const la = (Array.isArray(left.steps) ? left.steps : []).filter((row) => row?.fresh !== true)
+  const ra = (Array.isArray(right.steps) ? right.steps : []).filter((row) => row?.fresh !== true)
   const stepsEq =
     la.length === ra.length &&
     la.every(
@@ -52,6 +52,7 @@ function sameRouteLike(left, right) {
         row.name === ra[i].name &&
         row.provider === ra[i].provider &&
         row.model === ra[i].model &&
+        (row.reasoningEffort ?? '') === (ra[i].reasoningEffort ?? '') &&
         (row.expert ?? '') === (ra[i].expert ?? '') &&
         (row.skills ?? '') === (ra[i].skills ?? '')
     )
@@ -192,7 +193,25 @@ function makeContext(options = {}) {
             value: {
               groups: [
                 { id: 'our-free-model', name: 'Our Free Model', models: [{ id: 'deepseek-v4.1-flash-free', name: 'DeepSeek V4.1 Flash' }] },
-                { id: 'deepseek-account', name: 'DeepSeek Account', models: [{ id: 'deepseek-flash', name: 'DeepSeek Flash' }] }
+                {
+                  id: 'deepseek-account',
+                  name: 'DeepSeek Account',
+                  models: [
+                    {
+                      id: 'deepseek-flash',
+                      name: 'DeepSeek Flash',
+                      reasoning: {
+                        efforts: [
+                          { id: 'low', name: '低' },
+                          { id: 'high', name: '高' },
+                          { id: 'max', name: '极高' }
+                        ],
+                        defaultEffort: 'high'
+                      }
+                    },
+                    { id: 'deepseek-pro', name: 'DeepSeek Pro', reasoning: { efforts: [{ id: 'high', name: '高' }] } }
+                  ]
+                }
               ],
               failures: []
             }
@@ -255,12 +274,13 @@ function makeContext(options = {}) {
   await new Promise((resolve) => setImmediate(resolve))
   face.actions.setProvider('deepseek-account')
   check('provider change selects its first model', snapshot().draft.provider === 'deepseek-account' && snapshot().draft.model === 'deepseek-flash', JSON.stringify(snapshot().draft))
+  check('a supported effort survives the model switch', snapshot().draft.reasoningEffort === 'high', JSON.stringify(snapshot().draft))
   face.actions.setModel('deepseek-flash')
-  face.actions.setEffort('medium')
+  face.actions.setEffort('high')
   await face.actions.save()
   const mutation = state.mutations.at(-1)
   const routeOps = mutation.ops.filter((op) => ['provider', 'model', 'reasoningEffort'].includes(op.path[0]))
-  check('save sends the three route field ops + the revision', routeOps.length === 3 && mutation.expectedRevision === 3, JSON.stringify(mutation))
+  check('save sends the three route field ops + the revision', routeOps.length === 3 && mutation.expectedRevision === 3 && routeOps.find((op) => op.path[0] === 'reasoningEffort')?.value === 'high', JSON.stringify(mutation))
   check('saved route lands', snapshot().saved.provider === 'deepseek-account' && snapshot().saved.model === 'deepseek-flash', JSON.stringify(snapshot().saved))
   check('landed flag set', snapshot().landed === true, JSON.stringify({ failed: snapshot().failed, landed: snapshot().landed }))
   check('no longer dirty', snapshot().touched === false, JSON.stringify(snapshot().touched))
@@ -549,11 +569,21 @@ function makeContext(options = {}) {
     const page = state.registered[0].component({})
     return JSON.stringify(page.type(page.props))
   }
-  // Row 1 is brand new: empty name and no provider/model yet.
+  // Row 1 is brand new: empty name and no provider/model yet. The fresh
+  // placeholder raises NO issues — the old behavior painted the whole editor
+  // yellow the moment 添加步骤 was clicked, and its save would skip the row
+  // anyway. The first keystroke arms the checks for that row.
   face.actions.addStep()
   let rendered = render()
   check(
-    'incomplete step row is flagged yellow with a reason in the rendered output',
+    'a freshly added step row is not flagged before any input',
+    !rendered.includes('data-step-issues') && !rendered.includes('需要修正'),
+    rendered.slice(0, 900)
+  )
+  face.actions.setStep(0, { name: '' })
+  rendered = render()
+  check(
+    'after the first input the incomplete row is flagged yellow with a reason',
     rendered.includes('data-step-issues') &&
       rendered.includes('rgba(245, 180, 0, 0.14)') &&
       rendered.includes('步骤名不能为空') &&
@@ -585,12 +615,80 @@ function makeContext(options = {}) {
       rendered.includes('2 个步骤需要修正'),
     rendered.slice(0, 900)
   )
+  // An untouched placeholder row stays unflagged even while sibling rows are
+  // flagged: the fix count counts only armed rows.
+  face.actions.addStep()
+  rendered = render()
+  check(
+    'a new untouched row among flagged rows stays unflagged',
+    rendered.includes('2 个步骤需要修正') && !rendered.includes('3 个步骤需要修正'),
+    rendered.slice(0, 900)
+  )
 }
 
-// --- a flagged step row refuses the save instead of dropping it silently ---
-// The serialization loop skips rows with an empty name or a missing
-// provider/model. Before this guard the card still reported 「已保存」 and the
-// yellow row was simply absent from stepsJson.
+// --- effort options follow the model's declared efforts ---------------------
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '' } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  const render = () => JSON.stringify(state.registered[0].component({}).type(state.registered[0].component({}).props))
+  // deepseek-flash declares low/high/max with default high.
+  let rendered = render()
+  check(
+    'declared efforts replace the generic list (medium/extra_high absent)',
+    rendered.includes('value":"high"') && !rendered.includes('value":"medium"') && !rendered.includes('value":"extra_high"'),
+    rendered.slice(0, 400)
+  )
+  check(
+    'effort options carry the localized names and the default mark',
+    rendered.includes('低（low）') && rendered.includes('（默认）'),
+    rendered.slice(0, 400)
+  )
+  // Switching to a model that only declares high resets an unsupported value.
+  face.actions.setEffort('low')
+  check('a declared effort is selectable', snapshot().draft.reasoningEffort === 'low', JSON.stringify(snapshot().draft))
+  face.actions.setModel('deepseek-pro')
+  check(
+    'switching models resets an effort the new model does not declare',
+    snapshot().draft.model === 'deepseek-pro' && snapshot().draft.reasoningEffort === '',
+    JSON.stringify(snapshot().draft)
+  )
+  rendered = render()
+  check(
+    'the single-effort model offers only that effort',
+    rendered.includes('高（high）') && !rendered.includes('低（low）'),
+    rendered.slice(0, 400)
+  )
+  // A model with no reasoning declaration at all: switching to it resets the
+  // stored effort immediately (no effort options exist to keep).
+  face.actions.setModel('deepseek-flash')
+  face.actions.setEffort('max')
+  check('max is declared by deepseek-flash', snapshot().draft.reasoningEffort === 'max', JSON.stringify(snapshot().draft))
+  face.actions.setProvider('our-free-model')
+  check(
+    'undeclared-effort model resets the stored effort to empty',
+    snapshot().draft.reasoningEffort === '',
+    JSON.stringify(snapshot().draft)
+  )
+}
+
+// --- a stale stored effort is rendered but marked, never silently snapped ---
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'max' } })
+  module_.apply(ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  const page = state.registered[0].component({})
+  const rendered = JSON.stringify(page.type(page.props))
+  check(
+    'a stored effort the model does not declare renders marked as stale',
+    rendered.includes('value":"max"') && rendered.includes('max（该模型未声明）'),
+    rendered.slice(0, 500)
+  )
+}
+
+// --- step rows: effort per step, reset on model change, serialized ----------
 {
   const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
   module_.apply(ctx, {})
@@ -598,6 +696,44 @@ function makeContext(options = {}) {
   const snapshot = () => face.store.get()
   await new Promise((resolve) => setImmediate(resolve))
   face.actions.addStep()
+  face.actions.setStep(0, { name: 'review', provider: 'deepseek-account', model: 'deepseek-pro' })
+  face.actions.setStepEffort(0, 'high')
+  await face.actions.save()
+  const op = state.mutations.at(-1).ops.find((entry) => entry.path[0] === 'stepsJson')
+  const lane = op === undefined ? undefined : JSON.parse(op.value).review
+  check(
+    'step effort serializes into stepsJson and lands in the accepted route',
+    lane !== undefined && lane.reasoningEffort === 'high' && snapshot().saved.steps[0].reasoningEffort === 'high',
+    JSON.stringify(op)
+  )
+  face.actions.setStep(0, { model: 'deepseek-flash' })
+  check(
+    'switching a step model keeps an effort the new model declares',
+    snapshot().draft.steps[0].reasoningEffort === 'high',
+    JSON.stringify(snapshot().draft.steps[0])
+  )
+  face.actions.setStepEffort(0, 'max')
+  face.actions.setStep(0, { model: 'deepseek-pro' })
+  check(
+    'switching a step model resets an effort the new model does not declare',
+    snapshot().draft.steps[0].reasoningEffort === '',
+    JSON.stringify(snapshot().draft.steps[0])
+  )
+}
+
+// --- a flagged step row refuses the save instead of dropping it silently ---
+// The serialization loop skips rows with an empty name or a missing
+// provider/model. Before this guard the card still reported 「已保存」 and the
+// yellow row was simply absent from stepsJson. The row must be armed by an
+// input first: a fresh placeholder row raises no issues and cannot block.
+{
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  const face = state.registered[0].component({}).props.face
+  const snapshot = () => face.store.get()
+  await new Promise((resolve) => setImmediate(resolve))
+  face.actions.addStep()
+  face.actions.setStep(0, { name: '' }) // arm the row: it now has an empty name
   const page = state.registered[0].component({})
   const flagged = page.type(page.props)
   // The card computes the flag count and hands it to the click handler.
