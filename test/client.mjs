@@ -820,9 +820,9 @@ function makeContext(options = {}) {
 
 // --- step editor combos: expert/skills inputs offer installed choices ------
 // The host serves /delegation-hub/options with the Agency expert roster and
-// the skill registry's names; the card wires them into per-row datalists so
-// the dropdown offers installed values while free typing stays valid for
-// anything not installed yet.
+// the skill registry's names; the card renders them as filterable custom
+// dropdowns (the native datalist could not scroll 331 entries), while free
+// typing stays valid for anything not installed yet.
 {
   function findByType(node, type, out) {
     if (node === null || typeof node !== 'object') return out
@@ -839,40 +839,105 @@ function makeContext(options = {}) {
   const face = state.registered[0].component({}).props.face
   face.actions.addStep()
   face.actions.setStep(0, { name: 'review', provider: 'deepseek-account', model: 'deepseek-pro' })
-  const page = state.registered[0].component({})
-  const root = page.type(page.props)
   check(
     'the card fetches the options route once per mount',
     fetchCalls.includes('/delegation-hub/options'),
     JSON.stringify(fetchCalls)
   )
-  const datalists = findByType(root, 'datalist', [])
-  const optionNodes = findByType(root, 'option', []).filter((node) => typeof node.props?.value === 'string' && node.props.value !== '')
-  const inputs = findByType(root, 'input', []).filter((node) => typeof node.props?.list === 'string')
-  const expertList = datalists.find((node) => node.props?.id === 'delegation-hub-experts-0')
-  const skillList = datalists.find((node) => node.props?.id === 'delegation-hub-skills-0')
+  // Closed by default: no dropdown panels before focus.
+  const closed = state.registered[0].component({}).type(state.registered[0].component({}).props)
+  const closedText = JSON.stringify(closed)
   check(
-    'step rows carry per-row datalists for experts and skills',
-    expertList !== undefined && skillList !== undefined,
-    JSON.stringify(datalists.map((node) => node.props?.id))
+    'combo panels stay closed until an input is focused',
+    !closedText.includes('"position":"absolute"'),
+    'a panel rendered without focus'
   )
+  // Focus opens the panel: call the input's onFocus the way the browser would.
+  const opened = state.registered[0].component({}).type(state.registered[0].component({}).props)
+  const inputs = findByType(opened, 'input', []).filter((node) => typeof node.props?.onFocus === 'function')
+  const expertInput = inputs.find((node) => node.props?.placeholder?.includes('专家') ?? false)
   check(
-    'expert datalist offers the agency roster values from the options route',
-    expertList !== undefined &&
-      optionNodes.some((node) => node.props.value === 'frontend-developer') &&
-      optionNodes.some((node) => node.props.value === 'product-manager'),
-    JSON.stringify(optionNodes.map((node) => node.props.value))
+    'the expert combo input exists with focus wiring',
+    expertInput !== undefined,
+    JSON.stringify(inputs.map((node) => node.props?.placeholder))
   )
+  if (expertInput !== undefined) {
+    expertInput.props.onFocus()
+    const panel = state.registered[0].component({}).type(state.registered[0].component({}).props)
+    const panels = findByType(panel, 'div', []).filter((node) => node.props?.style?.position === 'absolute' && node.props?.style?.overflowY === 'auto')
+    const options = findByType(panel, 'span', []).map((node) => (typeof node.children?.[0] === 'string' ? node.children[0] : '')).join('|')
+    check(
+      'focusing the expert input opens a scrollable panel listing the agency roster',
+      panels.length === 1 && panels[0].props.style.maxHeight === '240px' && options.includes('Frontend Developer') && options.includes('产品经理'),
+      JSON.stringify({ panels: panels.length, options: options.slice(0, 200) })
+    )
+    // mousedown on the first option picks it through the draft pipeline.
+    const rows = findByType(panel, 'div', []).filter((node) => typeof node.props?.onMousedown === 'function')
+    const pickRow = rows.find((node) => JSON.stringify(node).includes('Frontend Developer'))
+    check(
+      'picking writes the expert slug through the same draft action',
+      pickRow !== undefined,
+      `rows with mousedown: ${rows.length}`
+    )
+    if (pickRow !== undefined) {
+      pickRow.props.onMousedown({ preventDefault: () => {} })
+      const draft = face.store.get().draft.steps[0]
+      check(
+        'the picked expert lands in the draft row',
+        draft.expert === 'frontend-developer',
+        JSON.stringify(draft)
+      )
+    }
+  }
+  // Filter: typing narrows the panel to matching entries. The pick above
+  // closed the panel, so refocus before asserting the filtered view. The
+  // fixture roster is English ("Frontend Developer"), so query by "front".
+  face.actions.setStep(0, { expert: 'front' })
+  const filterInputs = findByType(state.registered[0].component({}).type(state.registered[0].component({}).props), 'input', [])
+    .filter((node) => typeof node.props?.onFocus === 'function' && (node.props?.placeholder ?? '').includes('专家'))
+  filterInputs[0].props.onFocus()
+  const filtered = state.registered[0].component({}).type(state.registered[0].component({}).props)
+  const filteredPanelText = JSON.stringify(findByType(filtered, 'div', []).filter((node) => node.props?.style?.position === 'absolute'))
   check(
-    'skill datalist offers the registry skill names',
-    skillList !== undefined && optionNodes.some((node) => node.props.value === 'need-subagent'),
-    JSON.stringify(optionNodes.map((node) => node.props.value))
+    'typing narrows the panel by slug or localized name',
+    filteredPanelText.includes('frontend-developer') && !filteredPanelText.includes('product-manager'),
+    filteredPanelText.slice(0, 200)
   )
+  face.actions.setStep(0, { expert: '' })
+  // Skills append instead of replace: with an empty input the panel lists
+  // every registry skill; picking appends to the comma-separated list.
+  face.actions.setStep(0, { skills: 'need-subagent' })
+  const skillsView = state.registered[0].component({}).type(state.registered[0].component({}).props)
+  const skillInputs = findByType(skillsView, 'input', []).filter((node) => typeof node.props?.onFocus === 'function' && (node.props?.placeholder ?? '').includes('技能'))
   check(
-    'the expert input points at its row datalist while staying freely typable',
-    inputs.some((node) => node.props.list === 'delegation-hub-experts-0') && inputs.some((node) => node.props.list === 'delegation-hub-skills-0'),
-    JSON.stringify(inputs.map((node) => node.props.list))
+    'the skills combo input exists with focus wiring',
+    skillInputs.length === 1,
+    JSON.stringify(skillInputs.map((node) => node.props?.placeholder))
   )
+  if (skillInputs.length === 1) {
+    // The input currently holds "need-subagent", which filters the panel down
+    // to that one skill — proving the filter, but to assert the full list and
+    // the append behavior, clear the input first and refocus.
+    face.actions.setStep(0, { skills: '' })
+    skillInputs[0].props.onFocus()
+    const skillsPanel = state.registered[0].component({}).type(state.registered[0].component({}).props)
+    const pickRows = findByType(skillsPanel, 'div', []).filter((node) => typeof node.props?.onMousedown === 'function')
+    const leanRow = pickRows.find((node) => JSON.stringify(node).includes('leanrea-win'))
+    check(
+      'the skills panel lists registry names',
+      leanRow !== undefined,
+      `rows: ${pickRows.length}`
+    )
+    if (leanRow !== undefined) {
+      leanRow.props.onMousedown({ preventDefault: () => {} })
+      const draft = face.store.get().draft.steps[0]
+      check(
+        'picking a skill writes into the comma-separated list',
+        draft.skills === 'leanrea-win',
+        JSON.stringify(draft)
+      )
+    }
+  }
   // A failing options route must degrade to the plain inputs, never break the card.
   fetchMode = 'missing'
   {
@@ -884,12 +949,12 @@ function makeContext(options = {}) {
     degradedFace.actions.setStep(0, { name: 'review', provider: 'deepseek-account', model: 'deepseek-pro' })
     const page = degraded.state.registered[0].component({})
     const tree = page.type(page.props)
-    const degradedLists = findByType(tree, 'datalist', [])
-    const degradedOptions = findByType(tree, 'option', []).filter((node) => node.props?.value === 'frontend-developer' || node.props?.value === 'need-subagent')
+    const focusables = findByType(tree, 'input', []).filter((node) => typeof node.props?.onFocus === 'function')
+    const degradedPanel = focusables.length > 0 ? (focusables[0].props.onFocus(), findByType(page.type(page.props), 'div', []).filter((node) => node.props?.style?.position === 'absolute')) : []
     check(
-      'a failing options route renders the card with empty datalists instead of breaking',
-      degradedLists.length > 0 && degradedOptions.length === 0,
-      JSON.stringify({ lists: degradedLists.map((node) => node.props?.id), leaked: degradedOptions.length })
+      'a failing options route leaves the card editable with empty dropdowns instead of breaking',
+      focusables.length >= 2 && degradedPanel.length === 0,
+      JSON.stringify({ focusables: focusables.length, panels: degradedPanel.length })
     )
   }
   fetchMode = 'record'

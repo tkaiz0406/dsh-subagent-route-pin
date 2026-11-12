@@ -870,6 +870,107 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Which combo dropdown is open right now: `{ row, field }` identifies the
+     * one open panel; `null` means none. One global slot because only one
+     * dropdown can be open at a time — per-row-per-field state would multiply
+     * stores for an interaction that is single-open by nature.
+     */
+    const comboStore = createStore({ open: null })
+
+    /**
+     * A free-typing combobox with a filterable dropdown, replacing the native
+     * <datalist>: with 331 installed experts the native popup is a giant
+     * unfiltered list the user cannot scroll reliably in the desktop shell.
+     * The custom panel filters as the user types, scrolls with the wheel, and
+     * free typing still wins — a value that matches nothing stays in the input
+     * and is never reverted or blocked.
+     *
+     * Rendering is controlled: `open` lives in comboStore, options derive from
+     * the query (already inside the input's value), and picking writes through
+     * the same onChange the plain input used, so the draft pipeline, the
+     * issues model and the save guard are untouched.
+     */
+    function comboSelect({ row, field, placeholder, value, maxLength, choices, disabled, onInput, onPick }) {
+      const openHere = !disabled && comboStore.get().open !== null && comboStore.get().open.row === row && comboStore.get().open.field === field
+      const query = String(value ?? '').trim().toLowerCase()
+      const filtered = query === ''
+        ? choices
+        : choices.filter((choice) => choice.keywords.some((keyword) => keyword.includes(query)))
+      const shown = filtered.slice(0, 60)
+      return h(
+        'div',
+        { style: { position: 'relative', minWidth: 0 } },
+        h('input', {
+          placeholder,
+          value: value ?? '',
+          disabled,
+          maxLength,
+          style: { ...INPUT_STYLE, minWidth: 0 },
+          onChange: (event) => onInput(event.currentTarget.value),
+          onFocus: () => {
+            if (!disabled) comboStore.set({ open: { row, field } })
+          },
+          onBlur: () => {
+            // Delay so a mousedown on an option (which blurs the input) still
+            // lands before the panel disappears.
+            setTimeout(() => {
+              const current = comboStore.get().open
+              if (current !== null && current.row === row && current.field === field) comboStore.set({ open: null })
+            }, 150)
+          }
+        }),
+        openHere && shown.length > 0
+          ? h(
+              'div',
+              {
+                style: {
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  zIndex: 30,
+                  marginTop: '4px',
+                  maxHeight: '240px',
+                  overflowY: 'auto',
+                  background: 'var(--dsw-alias-bg-module-platform)',
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.35)'
+                }
+              },
+              shown.map((choice) =>
+                h(
+                  'div',
+                  {
+                    key: choice.id,
+                    // mousedown fires before the input's blur, so the pick must
+                    // happen here; click would arrive after the panel closed.
+                    onMousedown: (event) => {
+                      event.preventDefault()
+                      onPick(choice.id)
+                      comboStore.set({ open: null })
+                    }
+                  },
+                  h(
+                    'div',
+                    { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '6px 10px', fontSize: '13px', cursor: 'pointer' },
+                      onMousedown: (event) => {
+                        event.preventDefault()
+                        onPick(choice.id)
+                        comboStore.set({ open: null })
+                      }
+                    },
+                    h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, choice.label),
+                    h('span', { style: { flexShrink: 0, fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' } }, choice.meta ?? '')
+                  )
+                )
+              )
+            )
+          : null
+      )
+    }
+
+    /**
      * Live per-row issues of the step editor. Pure derivation from the draft
      * rows plus the catalog on every render — nothing is written back into the
      * draft or the store, so fixing a field clears the flag on the next frame
@@ -1279,42 +1380,49 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(90px, 0.8fr)', gap: '8px' } },
-              // Expert/skills are datalist-backed combos: the dropdown offers
-              // installed experts/skills, free typing stays valid for values
-              // that are not installed yet. The datalist id carries the row
-              // index so parallel rows never share one option list.
-              h('input', {
+              // Expert/skills are filterable combos backed by the options
+              // route: the dropdown offers installed experts/skills (scrollable,
+              // filtered as the user types), and free typing stays valid for
+              // values that are not installed yet.
+              comboSelect({
+                row: index,
+                field: 'expert',
                 placeholder: label(t, 'stepsExpertPlaceholder'),
                 value: row.expert ?? '',
-                disabled: !editable,
                 maxLength: 60,
-                list: `delegation-hub-experts-${index}`,
-                style: { ...INPUT_STYLE, minWidth: 0 },
-                onChange: (event) => face.actions.setStep(index, { expert: event.currentTarget.value })
+                disabled: !editable,
+                choices: (Array.isArray(options.experts) ? options.experts : []).map((expert) => ({
+                  id: expert.slug,
+                  label: `${expert.emoji ? `${expert.emoji} ` : ''}${expert.name}`,
+                  meta: expert.division,
+                  keywords: [String(expert.slug ?? '').toLowerCase(), String(expert.name ?? '').toLowerCase()]
+                })),
+                onInput: (value) => face.actions.setStep(index, { expert: value }),
+                onPick: (slug) => face.actions.setStep(index, { expert: slug })
               }),
-              h(
-                'datalist',
-                { id: `delegation-hub-experts-${index}` },
-                (Array.isArray(options.experts) ? options.experts : []).map((expert) =>
-                  h('option', { key: expert.slug, value: expert.slug }, `${expert.emoji ? `${expert.emoji} ` : ''}${expert.name} · ${expert.division}`)
-                )
-              ),
-              h('input', {
+              comboSelect({
+                row: index,
+                field: 'skills',
                 placeholder: label(t, 'stepsSkillsPlaceholder'),
                 value: row.skills ?? '',
-                disabled: !editable,
                 maxLength: 120,
-                list: `delegation-hub-skills-${index}`,
-                style: { ...INPUT_STYLE, minWidth: 0 },
-                onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
+                disabled: !editable,
+                choices: (Array.isArray(options.skills) ? options.skills : []).map((skill) => ({
+                  id: skill.name,
+                  label: skill.name,
+                  meta: '',
+                  keywords: [String(skill.name ?? '').toLowerCase(), String(skill.description ?? '').toLowerCase()]
+                })),
+                onInput: (value) => face.actions.setStep(index, { skills: value }),
+                onPick: (name) => {
+                  // Skills are a comma-separated list: append the picked name
+                  // to the current list instead of replacing it.
+                  const current = String(row.skills ?? '').trim()
+                  const names = current === '' ? [] : current.split(',').map((part) => part.trim()).filter((part) => part !== '')
+                  if (!names.some((part) => part.toLowerCase() === String(name).toLowerCase())) names.push(name)
+                  face.actions.setStep(index, { skills: names.join(', ') })
+                }
               }),
-              h(
-                'datalist',
-                { id: `delegation-hub-skills-${index}` },
-                (Array.isArray(options.skills) ? options.skills : []).map((skill) =>
-                  h('option', { key: skill.name, value: skill.name }, skill.description)
-                )
-              ),
               effortSelect(
                 t,
                 row.reasoningEffort ?? '',

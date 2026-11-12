@@ -1621,8 +1621,12 @@ writeFileSync(settingsPath, JSON.stringify({}), 'utf8')
   )
   check(
     'only services the plugin cannot run without are required',
-    requiredServices.length === 3 && requiredServices[0] === 'subagents' && requiredServices[1] === 'agents' && requiredServices[2] === 'webServer',
-    `inject=${JSON.stringify(inject)} - expect required ['subagents','agents','webServer'] (agents powers the runtime failover watcher; webServer powers the same-origin read routes)`
+    requiredServices.length === 4 &&
+      requiredServices[0] === 'subagents' &&
+      requiredServices[1] === 'agents' &&
+      requiredServices[2] === 'webServer' &&
+      requiredServices[3] === 'skills',
+    `inject=${JSON.stringify(inject)} - expect required ['subagents','agents','webServer','skills'] (agents powers the runtime failover watcher; webServer powers the same-origin read routes; skills feeds the options candidates)`
   )
 }
 

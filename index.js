@@ -64,11 +64,13 @@ export const name = 'delegation-hub'
 // (/delegation-hub/last-run, /delegation-hub/options); without declaring it the
 // service never appears on ctx and both registrations silently no-op. It is a
 // core desktop service (the web GUI itself runs on it), same hard requirement
-// as `subagents`.
+// as `subagents`. `skills` feeds the options route's skill-name candidates;
+// the desktop profile always mounts @deepseek-ai/dsh-skill, and the listing
+// call site still guards a missing/throwing registry down to [].
 //
 // `llm` is deliberately NOT listed: it is only read by the best-effort route check, whose
 // call site is wrapped in try/catch, so a build without it must degrade, not park.
-export const inject = ['subagents', 'agents', 'webServer']
+export const inject = ['subagents', 'agents', 'webServer', 'skills']
 
 /**
  * Activation probe. `load.json` proves only that the entry file was imported; it
