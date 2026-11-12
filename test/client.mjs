@@ -83,9 +83,22 @@ let lastRunFixture = {
   expert: '代码审查工程师',
   skills: ['aik_auto_memory_use', 'leanrea-win']
 }
+let optionsFixture = {
+  experts: [
+    { slug: 'frontend-developer', name: 'Frontend Developer', emoji: '✨', description: 'UI specialist', division: 'engineering' },
+    { slug: 'product-manager', name: '产品经理', emoji: '🧭', description: 'PM', division: 'product' }
+  ],
+  skills: [
+    { name: 'need-subagent', description: 'decision skill' },
+    { name: 'leanrea-win', description: 'RE quick path' }
+  ]
+}
 const fakeFetch = async (url) => {
   fetchCalls.push(String(url))
   if (fetchMode === 'missing') return { ok: false, status: 404 }
+  if (String(url) === '/delegation-hub/options') {
+    return { ok: true, json: async () => (fetchMode === 'empty' ? {} : optionsFixture) }
+  }
   return { ok: true, json: async () => (fetchMode === 'empty' ? {} : lastRunFixture) }
 }
 const sandbox = {
@@ -803,6 +816,83 @@ function makeContext(options = {}) {
     controls.length > 0 && noBorderBox.length === 0,
     noBorderBox.length > 0 ? `controls without border-box: ${JSON.stringify(noBorderBox.map((n) => n.props?.style))}` : JSON.stringify({ controls: controls.length })
   )
+}
+
+// --- step editor combos: expert/skills inputs offer installed choices ------
+// The host serves /delegation-hub/options with the Agency expert roster and
+// the skill registry's names; the card wires them into per-row datalists so
+// the dropdown offers installed values while free typing stays valid for
+// anything not installed yet.
+{
+  function findByType(node, type, out) {
+    if (node === null || typeof node !== 'object') return out
+    if (node.type === type) out.push(node)
+    const children = Array.isArray(node.children) ? node.children : node.props?.children
+    for (const child of Array.isArray(children) ? children.flat(Infinity) : []) {
+      if (child !== null && typeof child === 'object') findByType(child, type, out)
+    }
+    return out
+  }
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  await new Promise((resolve) => setImmediate(resolve))
+  const face = state.registered[0].component({}).props.face
+  face.actions.addStep()
+  face.actions.setStep(0, { name: 'review', provider: 'deepseek-account', model: 'deepseek-pro' })
+  const page = state.registered[0].component({})
+  const root = page.type(page.props)
+  check(
+    'the card fetches the options route once per mount',
+    fetchCalls.includes('/delegation-hub/options'),
+    JSON.stringify(fetchCalls)
+  )
+  const datalists = findByType(root, 'datalist', [])
+  const optionNodes = findByType(root, 'option', []).filter((node) => typeof node.props?.value === 'string' && node.props.value !== '')
+  const inputs = findByType(root, 'input', []).filter((node) => typeof node.props?.list === 'string')
+  const expertList = datalists.find((node) => node.props?.id === 'delegation-hub-experts-0')
+  const skillList = datalists.find((node) => node.props?.id === 'delegation-hub-skills-0')
+  check(
+    'step rows carry per-row datalists for experts and skills',
+    expertList !== undefined && skillList !== undefined,
+    JSON.stringify(datalists.map((node) => node.props?.id))
+  )
+  check(
+    'expert datalist offers the agency roster values from the options route',
+    expertList !== undefined &&
+      optionNodes.some((node) => node.props.value === 'frontend-developer') &&
+      optionNodes.some((node) => node.props.value === 'product-manager'),
+    JSON.stringify(optionNodes.map((node) => node.props.value))
+  )
+  check(
+    'skill datalist offers the registry skill names',
+    skillList !== undefined && optionNodes.some((node) => node.props.value === 'need-subagent'),
+    JSON.stringify(optionNodes.map((node) => node.props.value))
+  )
+  check(
+    'the expert input points at its row datalist while staying freely typable',
+    inputs.some((node) => node.props.list === 'delegation-hub-experts-0') && inputs.some((node) => node.props.list === 'delegation-hub-skills-0'),
+    JSON.stringify(inputs.map((node) => node.props.list))
+  )
+  // A failing options route must degrade to the plain inputs, never break the card.
+  fetchMode = 'missing'
+  {
+    const degraded = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+    module_.apply(degraded.ctx, {})
+    await new Promise((resolve) => setImmediate(resolve))
+    const degradedFace = degraded.state.registered[0].component({}).props.face
+    degradedFace.actions.addStep()
+    degradedFace.actions.setStep(0, { name: 'review', provider: 'deepseek-account', model: 'deepseek-pro' })
+    const page = degraded.state.registered[0].component({})
+    const tree = page.type(page.props)
+    const degradedLists = findByType(tree, 'datalist', [])
+    const degradedOptions = findByType(tree, 'option', []).filter((node) => node.props?.value === 'frontend-developer' || node.props?.value === 'need-subagent')
+    check(
+      'a failing options route renders the card with empty datalists instead of breaking',
+      degradedLists.length > 0 && degradedOptions.length === 0,
+      JSON.stringify({ lists: degradedLists.map((node) => node.props?.id), leaked: degradedOptions.length })
+    )
+  }
+  fetchMode = 'record'
 }
 
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)

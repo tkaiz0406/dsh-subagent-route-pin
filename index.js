@@ -47,7 +47,7 @@
  * child's own LLM stream, cannot be caught here.
  */
 
-import { appendFileSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -118,6 +118,10 @@ const RUN_RECORD_NAME = 'delegation-hub.last-run.json'
 // The browser has no file access and the host exposes no file-reading RPC, so a
 // named WebRoute is the only host-to-page surface for it.
 const LAST_RUN_ROUTE = '/delegation-hub/last-run'
+// Same-origin read route that lists the skills and Agency experts the page's
+// step editor can offer as autocomplete choices. Free typing stays valid — the
+// lists only seed a datalist, they never constrain the field.
+const OPTIONS_ROUTE = '/delegation-hub/options'
 // Append-only delegation event stream: one JSON object per line. Tree views,
 // captain reports and evidence anchors read this instead of the single-slot
 // last-run file, because overwriting would drop every earlier delegation.
@@ -1872,6 +1876,7 @@ function applyInner(ctx, config = {}) {
     }
   }
   registerLastRunRoute(ctx, readinessPath)
+  registerOptionsRoute(ctx)
   return { mounted: true }
 }
 
@@ -1933,5 +1938,208 @@ function registerLastRunRoute(ctx, readinessPath) {
     }
   } catch (error) {
     ctx.logger.warn(`${PLUGIN}: last-run route not registered: ${describeError(error)}`)
+  }
+}
+
+/**
+ * Parse the `key: value` frontmatter head of one Agency expert markdown file.
+ * Mirrors the agency plugin's own reader (`parseFrontmatterMetadata`): quoted
+ * values are unquoted, a missing name/description leaves the field undefined
+ * and the caller skips the file. Returns null when the file has no frontmatter
+ * block at all.
+ */
+function parseExpertFrontmatter(text) {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+  if (match === null) return null
+  const get = (key) => {
+    const found = match[1].match(new RegExp(`^${key}\\s*:\\s*(.*)$`, 'm'))
+    if (found === null) return undefined
+    const raw = found[1].trim()
+    return raw.length >= 2 && (raw.startsWith('"') || raw.startsWith("'")) && raw.endsWith(raw[0])
+      ? raw.slice(1, -1)
+      : raw
+  }
+  return { name: get('name'), description: get('description'), emoji: get('emoji') }
+}
+
+/** One division directory (walk one level deep; no recursion needed — the agency layout is flat). */
+function listDivisionExperts(root, division) {
+  const dir = join(root, division)
+  if (!existsSync(dir)) return []
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const experts = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue
+    const filePath = join(dir, entry.name)
+    let text
+    try {
+      text = readFileSync(filePath, 'utf8')
+    } catch {
+      continue
+    }
+    const parsed = parseExpertFrontmatter(text)
+    if (parsed === null || !parsed.name || !parsed.description) continue
+    experts.push({
+      slug: entry.name.slice(0, -3),
+      name: parsed.name,
+      emoji: typeof parsed.emoji === 'string' ? parsed.emoji : '',
+      description: parsed.description,
+      division
+    })
+  }
+  return experts
+}
+
+/**
+ * Resolve the agency plugin's installed assets root by walking up from this
+ * plugin's own node_modules — the desktop profile installs both under the same
+ * profile node_modules tree, so directory walking is a stable anchor across
+ * install layouts (a bare require.resolve would import the agency entry, which
+ * this plugin must not do). Falls back to the desktop profile tree.
+ */
+function resolveAgencyAssetsRoot() {
+  try {
+    // Start at this plugin's own directory (dirname of index.js) and walk up.
+    const here = dirname(decodeURIComponent(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')))
+    let dir = here
+    for (let hop = 0; hop < 6; hop += 1) {
+      const candidate = join(dir, '@michengai', 'dsh-agency-agents', 'assets', 'agency-agents-zh')
+      if (existsSync(candidate)) return candidate
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  } catch {
+    /* unreadable module URL: fall through */
+  }
+  // Fallback: the desktop profile tree, where this plugin is also installed.
+  try {
+    const candidate = join(homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', '@michengai', 'dsh-agency-agents', 'assets', 'agency-agents-zh')
+    if (existsSync(candidate)) return candidate
+  } catch {
+    /* no home: skip */
+  }
+  return undefined
+}
+
+/**
+ * List Agency experts the same way the agency plugin builds its own catalog:
+ * every `<root>/<division>/*.md` with name+description frontmatter becomes one
+ * expert keyed by its file slug. Custom personas recorded in
+ * `~/.dsh/agency-expert-personas.json` (a name → persona-prompt map the Agency
+ * settings page writes) join the list as custom entries so a user-typed expert
+ * shows up alongside the bundled roster.
+ */
+function listAgencyExperts() {
+  const experts = new Map()
+  const root = resolveAgencyAssetsRoot()
+  if (root !== undefined) {
+    let divisions = []
+    try {
+      divisions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    } catch {
+      divisions = []
+    }
+    for (const division of divisions) {
+      for (const expert of listDivisionExperts(root, division)) {
+        if (!experts.has(expert.slug)) experts.set(expert.slug, expert)
+      }
+    }
+  }
+  // Custom personas: the Agency settings page stores overrides keyed by slug.
+  try {
+    const customPath = join(homedir(), '.dsh', 'agency-expert-personas.json')
+    if (existsSync(customPath)) {
+      const parsed = JSON.parse(readFileSync(customPath, 'utf8'))
+      if (parsed !== null && typeof parsed === 'object' && parsed.experts !== null && typeof parsed.experts === 'object') {
+        for (const [slug, persona] of Object.entries(parsed.experts)) {
+          if (typeof slug !== 'string' || slug === '' || typeof persona !== 'string') continue
+          const existing = experts.get(slug)
+          experts.set(slug, {
+            slug,
+            name: existing?.name ?? slug,
+            emoji: existing?.emoji ?? '✳️',
+            description: existing?.description ?? '自定义专家',
+            division: existing?.division ?? 'custom'
+          })
+        }
+      }
+    }
+  } catch {
+    /* torn custom file: bundled roster still stands */
+  }
+  return [...experts.values()]
+}
+
+/**
+ * List model-invocable skill names via the host `skills` service. Missing
+ * service, throwing registry and unready catalogs all degrade to an empty
+ * list — the datalist is a convenience, never a gate.
+ */
+function listSkillOptions(ctx) {
+  try {
+    const registry = typeof ctx.get === 'function' ? ctx.get('skills') : undefined
+    if (registry === undefined || registry === null || typeof registry.list !== 'function') return []
+    const skills = registry.list()
+    if (!Array.isArray(skills)) return []
+    return skills
+      .filter((skill) => skill !== null && typeof skill === 'object' && typeof skill.name === 'string' && skill.name !== '')
+      .map((skill) => ({ name: skill.name, description: typeof skill.description === 'string' ? skill.description : '' }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Publish the step-editor autocomplete options over a same-origin WebRoute.
+ *
+ * The page's expert/skills inputs become datalist-backed combos: the dropdown
+ * offers the skills the host skill registry lists and the Agency expert roster,
+ * while free typing stays valid for values that are not installed yet. Read
+ * only, best-effort on purpose — every failure mode degrades to empty lists,
+ * which renders exactly the plain text inputs the page shipped with.
+ */
+function registerOptionsRoute(ctx) {
+  try {
+    const webServer = ctx.webServer
+    if (webServer === undefined || webServer === null || typeof webServer.register !== 'function') return
+    const disposeRoute = webServer.register({
+      kind: 'exact',
+      path: OPTIONS_ROUTE,
+      handler: (_req, res) => {
+        let body = JSON.stringify({ experts: [], skills: [] })
+        try {
+          body = JSON.stringify({ experts: listAgencyExperts(), skills: listSkillOptions(ctx) })
+        } catch {
+          /* keep the empty body rather than a 500: the combo must not break */
+        }
+        res.statusCode = 200
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(body)
+      }
+    })
+    if (typeof disposeRoute !== 'function') return
+    try {
+      ctx.effect(
+        () => () => {
+          try {
+            disposeRoute()
+          } catch {
+            /* a dead route must not break teardown */
+          }
+        },
+        `${PLUGIN}: options route`
+      )
+    } catch {
+      /* no effect scope in this build: the route lives with the process */
+    }
+  } catch (error) {
+    ctx.logger.warn(`${PLUGIN}: options route not registered: ${describeError(error)}`)
   }
 }

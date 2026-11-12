@@ -320,6 +320,38 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Autocomplete seed lists for the step editor's expert/skills inputs,
+     * fetched once per mount from the host's same-origin
+     * `/delegation-hub/options` route. A missing or failing route degrades to
+     * empty lists — the inputs then render as the plain free-text fields they
+     * always were, since free typing stays valid regardless of the lists.
+     */
+    const optionsStore = createStore({ status: 'idle', experts: [], skills: [] })
+
+    async function loadOptions() {
+      if (typeof fetch !== 'function') {
+        optionsStore.set({ status: 'unavailable', experts: [], skills: [] })
+        return
+      }
+      try {
+        const response = await fetch('/delegation-hub/options')
+        if (response === null || typeof response !== 'object' || response.ok !== true) {
+          optionsStore.set({ status: 'unavailable', experts: [], skills: [] })
+          return
+        }
+        const body = await response.json()
+        const pick = (value) => (Array.isArray(value) ? value.filter((entry) => entry !== null && typeof entry === 'object') : [])
+        optionsStore.set({
+          status: 'ready',
+          experts: pick(body?.experts),
+          skills: pick(body?.skills)
+        })
+      } catch {
+        optionsStore.set({ status: 'unavailable', experts: [], skills: [] })
+      }
+    }
+
     function routeOf(snapshot) {
       const value = snapshot?.value ?? {}
       return {
@@ -996,6 +1028,7 @@ window.__ModuleLoader__.load({
       const face = props.face
       const state = React.useSyncExternalStore(face.store.subscribe, face.store.get, face.store.get)
       const lastRun = React.useSyncExternalStore(lastRunStore.subscribe, lastRunStore.get, lastRunStore.get)
+      const options = React.useSyncExternalStore(optionsStore.subscribe, optionsStore.get, optionsStore.get)
       const rows = candidates(state.catalog.groups, state.saved)
       const stepIssueList = stepIssues(state.draft.steps, state.catalog, rows)
       const flaggedStepCount = stepIssueList.reduce((total, issues) => total + (issues.length > 0 ? 1 : 0), 0)
@@ -1246,22 +1279,42 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(90px, 0.8fr)', gap: '8px' } },
+              // Expert/skills are datalist-backed combos: the dropdown offers
+              // installed experts/skills, free typing stays valid for values
+              // that are not installed yet. The datalist id carries the row
+              // index so parallel rows never share one option list.
               h('input', {
                 placeholder: label(t, 'stepsExpertPlaceholder'),
                 value: row.expert ?? '',
                 disabled: !editable,
                 maxLength: 60,
+                list: `delegation-hub-experts-${index}`,
                 style: { ...INPUT_STYLE, minWidth: 0 },
                 onChange: (event) => face.actions.setStep(index, { expert: event.currentTarget.value })
               }),
+              h(
+                'datalist',
+                { id: `delegation-hub-experts-${index}` },
+                (Array.isArray(options.experts) ? options.experts : []).map((expert) =>
+                  h('option', { key: expert.slug, value: expert.slug }, `${expert.emoji ? `${expert.emoji} ` : ''}${expert.name} · ${expert.division}`)
+                )
+              ),
               h('input', {
                 placeholder: label(t, 'stepsSkillsPlaceholder'),
                 value: row.skills ?? '',
                 disabled: !editable,
                 maxLength: 120,
+                list: `delegation-hub-skills-${index}`,
                 style: { ...INPUT_STYLE, minWidth: 0 },
                 onChange: (event) => face.actions.setStep(index, { skills: event.currentTarget.value })
               }),
+              h(
+                'datalist',
+                { id: `delegation-hub-skills-${index}` },
+                (Array.isArray(options.skills) ? options.skills : []).map((skill) =>
+                  h('option', { key: skill.name, value: skill.name }, skill.description)
+                )
+              ),
               effortSelect(
                 t,
                 row.reasoningEffort ?? '',
@@ -1360,6 +1413,7 @@ window.__ModuleLoader__.load({
       // stale page never keeps showing a record from an earlier generation).
       ctx.effect(() => {
         void loadLastRun()
+        void loadOptions()
         return () => {}
       }, 'delegation-hub: last-run')
       const onRemote = (event, handler) => {

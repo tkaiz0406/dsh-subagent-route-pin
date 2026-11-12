@@ -2427,5 +2427,102 @@ rmSync(dir, { recursive: true, force: true })
   )
 }
 
+// --- options route: expert/skill datalists for the step editor -------------
+// The page fetches /delegation-hub/options to offer installed experts and
+// skills as autocomplete choices. The route must answer 200 with well-formed
+// lists even when the skills service is missing or throws: a degraded combo
+// is the plain input the page shipped with, never a broken page.
+{
+  const routes = new Map()
+  const makeCaptureCtx = (extra = {}) => ({
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    effect: () => {},
+    // applyInner refuses to mount without a subagent service, and the route
+    // registration lives past that gate — mirror the minimal shape the other
+    // harnesses provide.
+    subagents: {
+      registerProvider: () => {}
+    },
+    webServer: {
+      register: (route) => {
+        routes.set(route.path, route.handler)
+        return () => routes.delete(route.path)
+      }
+    },
+    ...extra
+  })
+  const respond = (handler) =>
+    new Promise((resolve) => {
+      const chunks = []
+      handler({}, {
+        statusCode: 0,
+        setHeader: () => {},
+        end: (body) => resolve({ code: chunks.code, body })
+      })
+    })
+
+  // 1. Real machine: the route answers with the bundled agency roster.
+  {
+    routes.clear()
+    const { apply } = await import('../index.js')
+    const ctx = makeCaptureCtx()
+    apply(ctx, { settingsPath: join('.dsh-test', 'settings.json'), readinessPath: join('.dsh-test', 'ready.json') })
+    const handler = routes.get('/delegation-hub/options')
+    const response = handler === undefined ? undefined : await respond(handler)
+    let parsed
+    try { parsed = JSON.parse(response?.body ?? '') } catch {}
+    check(
+      'options route serves the agency expert roster from the local install',
+      handler !== undefined &&
+        response?.code === undefined &&
+        Array.isArray(parsed?.experts) &&
+        parsed.experts.length > 100 &&
+        parsed.experts.every((e) => typeof e.slug === 'string' && typeof e.name === 'string' && typeof e.division === 'string'),
+      JSON.stringify({ hasHandler: handler !== undefined, count: parsed?.experts?.length, sample: parsed?.experts?.[0] })
+    )
+    check(
+      'options route answers with an empty (but present) skills list when the host has no skills service',
+      Array.isArray(parsed?.skills),
+      JSON.stringify({ skills: parsed?.skills })
+    )
+  }
+
+  // 2. A throwing skills service degrades to [] instead of a 500.
+  {
+    routes.clear()
+    const { apply } = await import('../index.js')
+    const ctx = makeCaptureCtx({ get: () => { throw new Error('registry exploded') } })
+    apply(ctx, { settingsPath: join('.dsh-test', 'settings.json'), readinessPath: join('.dsh-test', 'ready.json') })
+    const handler = routes.get('/delegation-hub/options')
+    const response = await respond(handler)
+    let parsed
+    try { parsed = JSON.parse(response?.body ?? '') } catch {}
+    check(
+      'options route survives a throwing skills service',
+      Array.isArray(parsed?.experts) && Array.isArray(parsed?.skills) && parsed.skills.length === 0,
+      JSON.stringify({ experts: parsed?.experts?.length, skills: parsed?.skills?.length })
+    )
+  }
+
+  // 3. A skills service that lists works end to end.
+  {
+    routes.clear()
+    const { apply } = await import('../index.js')
+    const ctx = makeCaptureCtx({
+      get: (name) => (name === 'skills' ? { list: () => [{ name: 'need-subagent', description: 'd', invocation: { modelInvocable: true } }, { name: '' }, null] } : undefined)
+    })
+    apply(ctx, { settingsPath: join('.dsh-test', 'settings.json'), readinessPath: join('.dsh-test', 'ready.json') })
+    const handler = routes.get('/delegation-hub/options')
+    const response = await respond(handler)
+    let parsed
+    try { parsed = JSON.parse(response?.body ?? '') } catch {}
+    check(
+      'options route maps a listing skills service to {name, description} pairs and skips junk entries',
+      parsed?.skills?.length === 1 && parsed.skills[0].name === 'need-subagent' && parsed.skills[0].description === 'd',
+      JSON.stringify(parsed?.skills)
+    )
+  }
+}
+
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)
