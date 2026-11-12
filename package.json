@@ -1,7 +1,7 @@
 {
   "name": "dsh-delegation-hub",
-  "version": "0.9.2",
-  "description": "DSH 委派中枢 / Delegation Hub: one model-division net for every delegated agent — Agency experts, Agent-Teams members, one-shot subagents. Pin the route (provider + model + reasoning effort) without touching the main agent; adds a Settings page (设置 → 委派中枢) that edits the route like the main-agent model picker, plus a team status panel (dsh-team-status). Planned in 0.9: per-role routes, hard-pin against in-session model switches, fallback route on quota/auth failures, catalog preflight.",
+  "version": "0.9.3",
+  "description": "DSH 濮旀淳涓灑 / Delegation Hub: one model-division net for every delegated agent 鈥?Agency experts, Agent-Teams members, one-shot subagents. Pin the route (provider + model + reasoning effort) without touching the main agent; adds a Settings page (璁剧疆 鈫?濮旀淳涓灑) that edits the route like the main-agent model picker, plus a team status panel (dsh-team-status). Planned in 0.9: per-role routes, hard-pin against in-session model switches, fallback route on quota/auth failures, catalog preflight.",
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -36,7 +36,7 @@
     "agency-agents",
     "orchestration"
   ],
-  "author": "沈思宏 (https://github.com/tkaiz0406)",
+  "author": "娌堟€濆畯 (https://github.com/tkaiz0406)",
   "license": "MIT",
   "repository": {
     "type": "git",

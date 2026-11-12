@@ -243,8 +243,9 @@ node test/logs.mjs --log captured-console.txt
 
 | DSH / `@deepseek-ai/dsh-tool-subagent` | 状态 | 说明 |
 | --- | --- | --- |
-| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 人类可读的覆盖区间；`peerDependencies` 的实际写法是 4 段 OR 链 `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-rc.1 <0.2.2-0 \|\| >=0.2.2-rc.1 <0.3.0-0 \|\| >=0.3.0-rc.1 <0.4.0-0`（逐 minor 分支放行 rc，单段宽范围会 drop 掉 `0.2.1-rc.*` 并触发 ERESOLVE），`0.2.1-rc.2`、`0.2.1-rc.3` 实测 279 项断言（run 227 + client 52）全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
+| `0.2.0-rc.1` ≤ 版本 < `0.4.0` | ✅ 覆盖范围 | 人类可读的覆盖区间；`peerDependencies` 的实际写法是 4 段 OR 链 `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-rc.1 <0.2.2-0 \|\| >=0.2.2-rc.1 <0.3.0-0 \|\| >=0.3.0-rc.1 <0.4.0-0`（逐 minor 分支放行 rc，单段宽范围会 drop 掉 `0.2.1-rc.*` 并触发 ERESOLVE），`0.2.1-rc.2`、`0.2.1-rc.3`、`0.2.2-rc.1` 实测断言全绿；本机构建只有 `startActivation`（无 `startContinuable`），插件按 `startActivation` 注入 |
 | `0.2.1-rc.3` | ✅ 已验证 | 桌面端 0.2.1-rc.3 上 readiness 记录显示 `seams: ["startActivation"]`、`teamInjection: installed`，配置行路由生效 |
+| `0.2.2-rc.1` | ✅ 已验证 | 桌面端 0.2.2-rc.1（`@deepseek-ai/dsh-desktop-runtime` 0.2.2-rc.1）上 readiness 记录同上；2026-11-11 的真实团队委派在 `~/.dsh/delegation-hub.events.jsonl` 留下 `outcome: "pinned"` 记录，且 `failoverRoute` 在一次 AUTH 车道故障中实际触发改写（`outcome: "failover"`）——委派接缝、配置行路由与流内故障切换在该构建上均实测工作 |
 | `0.2.0-rc.x` | ❓ 未验证 | 接口面看起来一致（旧版走 `startContinuable`），但没跑过；装了会看到 peer 警告 |
 | `>= 0.4.0` | ⚠️ 未验证 | 超出 peer 范围，DSH 插件管理器会标「异常」并拒绝启动；上游一旦改动 provider 或创建子代理的接缝，日志会先缺，插件按能力标志降级 |
 
