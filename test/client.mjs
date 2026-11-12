@@ -771,5 +771,39 @@ function makeContext(options = {}) {
   )
 }
 
+// --- layout: every select/input must size its box inside its grid cell -----
+// The step-route row and the main route put width:100% controls inside
+// minmax(0,1fr) grid tracks. Without box-sizing:border-box the default
+// content-box adds padding+border on top of 100%, which pushes the control
+// past its column edge and overlaps the neighbor in narrow settings panes.
+// jsdom cannot measure real geometry, so this walks the rendered VDOM and
+// asserts the declaration directly — a regression removing border-box is
+// caught here even though we cannot see pixels.
+{
+  function walk(node, out) {
+    if (node === null || typeof node !== 'object') return out
+    const children = Array.isArray(node.children) ? node.children : [node.props?.children].filter((c) => c !== undefined && c !== null)
+    // Only <select> controls live in a grid cell and share SELECT_STYLE:
+    // checkbox <input>s are free-floating and legitimately carry no box sizing.
+    if (node.type === 'select') out.push(node)
+    for (const child of Array.isArray(children) ? children.flat(Infinity) : []) {
+      if (child !== null && typeof child === 'object') walk(child, out)
+    }
+    return out
+  }
+  const { ctx, state } = makeContext({ value: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: '', steps: null } })
+  module_.apply(ctx, {})
+  const page = state.registered[0].component({})
+  const root = page.type(page.props)
+  const controls = walk(root, [])
+  const styleOf = (node) => (node.props && node.props.style && typeof node.props.style === 'object' ? node.props.style : {})
+  const noBorderBox = controls.filter((n) => styleOf(n).boxSizing !== 'border-box')
+  check(
+    'every select/input is sized border-box so 100% width cannot overflow its grid cell',
+    controls.length > 0 && noBorderBox.length === 0,
+    noBorderBox.length > 0 ? `controls without border-box: ${JSON.stringify(noBorderBox.map((n) => n.props?.style))}` : JSON.stringify({ controls: controls.length })
+  )
+}
+
 console.log(failures === 0 ? '\nall client checks passed' : `\n${failures} client check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)
